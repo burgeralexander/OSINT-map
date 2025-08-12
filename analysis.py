@@ -749,7 +749,7 @@ def main():
     fix_entity_indices(project)
 
     endpoint_url = 'http://127.0.0.1:4000/geoclip'
-    project_dir = f"./{project}"
+    project_dir = f"./temp/{project}"
     os.makedirs(project_dir, exist_ok=True)
     image_folder = os.path.join(project_dir, 'images')
     os.makedirs(image_folder, exist_ok=True)

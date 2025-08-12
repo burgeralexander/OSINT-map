@@ -1297,7 +1297,7 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname))
 });
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
-app.get('/map', (req, res) => {
+app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'osint-map.html'));
 });
 app.post('/process-data', upload.single('image'), async (req, res) => {
