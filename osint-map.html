@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSINT-map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #121212;
+            color: #e0e0e0;
+        }
+
+        header {
+            background: linear-gradient(135deg, #001f3f, #0a0a0a);
+            color: #e0e0e0;
+            padding: 10px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        header h3 {
+            margin: 0;
+            font-size: 1.4rem;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(2, minmax(300px, 1fr));
+            gap: 10px;
+            padding: 10px;
+            height: calc(100vh - 60px);
+            box-sizing: border-box;
+        }
+
+        .section-box {
+            background: #1e1e1e;
+            border-radius: 4px;
+            padding: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.3s ease;
+        }
+
+        .section-box.dragging {
+            opacity: 0.5;
+            z-index: 1000;
+        }
+
+        .section-box.drag-over {
+            border: 2px dashed #4682b4;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            cursor: move;
+            user-select: none;
+        }
+
+        .section-box h4 {
+            margin: 0;
+            font-size: 1rem;
+            color: #4682b4;
+        }
+
+        .section-controls {
+            display: flex;
+            gap: 5px;
+        }
+
+        .resize-handle {
+            position: absolute;
+            background: #4682b4;
+            opacity: 0.3;
+            transition: opacity 0.2s;
+        }
+
+        .resize-handle:hover {
+            opacity: 0.7;
+        }
+
+        .resize-handle-right {
+            right: 0;
+            top: 0;
+            width: 5px;
+            height: 100%;
+            cursor: ew-resize;
+        }
+
+        .resize-handle-bottom {
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 5px;
+            cursor: ns-resize;
+        }
+
+        .resize-handle-corner {
+            right: 0;
+            bottom: 0;
+            width: 15px;
+            height: 15px;
+            cursor: nwse-resize;
+            background: radial-gradient(#4682b4, transparent);
+        }
+
+        .section-content {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: auto;
+            min-width: 0;
+        }
+
+        .section-content::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        .section-content::-webkit-scrollbar-track {
+            background: #2a2a2a;
+            border-radius: 4px;
+        }
+
+        .section-content::-webkit-scrollbar-thumb {
+            background: #4682b4;
+            border-radius: 4px;
+        }
+
+        .section-content::-webkit-scrollbar-thumb:hover {
+            background: #5a9bd4;
+        }
+
+        .size-dropdown {
+            background: #333;
+            color: #e0e0e0;
+            border: none;
+            padding: 2px 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            border-radius: 2px;
+        }
+
+        .size-dropdown:hover {
+            background: #444;
+        }
+
+        .col-span-2 { grid-column: span 2; }
+        .col-span-3 { grid-column: span 3; }
+        .col-span-4 { grid-column: span 4; }
+        .row-span-2 { grid-row: span 2; }
+
+        #map, #globe {
+            width: 100%;
+            height: 100%;
+            min-height: 200px;
+            min-width: 200px;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+
+        form {
+            margin-bottom: 10px;
+            min-width: 200px;
+        }
+
+        form label {
+            display: block;
+            margin-bottom: 3px;
+            font-weight: 600;
+            color: #bbb;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        input[type="file"] {
+            width: 100%;
+            min-width: 150px;
+            padding: 6px;
+            border: 1px solid #333;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            background: #2a2a2a;
+            color: #e0e0e0;
+            box-sizing: border-box;
+        }
+
+        button {
+            cursor: pointer;
+            background: #001f3f;
+            color: #e0e0e0;
+            border: none;
+            padding: 6px 8px;
+            border-radius: 4px;
+            margin-right: 5px;
+            margin-top: 5px;
+            transition: background 0.3s;
+            white-space: nowrap;
+        }
+
+        button:hover {
+            background: #003366;
+        }
+
+        .result,
+        .console-output {
+            white-space: pre-wrap;
+            background: #2a2a2a;
+            padding: 8px;
+            border: 1px solid #333;
+            border-radius: 4px;
+            max-height: 100px;
+            overflow-y: auto;
+            overflow-x: auto;
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #e0e0e0;
+            min-width: 200px;
+        }
+
+        #data-view {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 5px;
+            height: 100%;
+            overflow-y: auto;
+            overflow-x: auto;
+            min-width: 300px;
+        }
+
+        .data-item {
+            background: #2a2a2a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 8px;
+            min-width: 140px;
+        }
+
+        .data-item img,
+        .data-item video {
+            max-width: 100%;
+            border-radius: 4px;
+        }
+
+        #connection-graph,
+        #js-connection-graph {
+            height: 100%;
+            min-height: 200px;
+            min-width: 200px;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+
+        #python-images {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            min-width: 200px;
+        }
+
+        #python-images img {
+            max-width: 100%;
+            border-radius: 4px;
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid #333;
+            margin: 10px 0;
+        }
+
+        #data-analysis-controls {
+            min-width: 250px;
+        }
+
+        #data-view-sentinel {
+            height: 20px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h3>OSINT-map</h3>
+    </header>
+    <div class="grid-container" id="gridContainer">
+        <div class="section-box" data-section="data-analysis">
+            <div class="section-header">
+                <h4>Data Analysis and Controls</h4>
+                <div class="section-controls">
+                    <select class="size-dropdown">
+                        <option value="1x1" selected>1x1</option>
+                        <option value="2x1">2x1</option>
+                        <option value="1x2">1x2</option>
+                        <option value="2x2">2x2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="section-content" id="data-analysis-controls">
+                <h4>Scraper</h4>
+                <form id="scrape-form">
+                    <label for="query">Query (comma-separated):</label>
+                    <input type="text" id="query" name="query" placeholder="e.g. John Smith, Jane Doe" required>
+                    <label for="depth">Recursion Depth:</label>
+                    <input type="number" id="depth" name="depth" min="1" value="1" required>
+                    <button type="submit">Scrape</button>
+                    <button id="break-attempt-loop">Break Loop</button>
+                </form>
+                <h4>Console Output</h4>
+                <div id="console-output" class="console-output"></div>
+                <button id="load-graph-btn">Load Network Graph</button>
+                <hr>
+                <h4>Python Analysis</h4>
+                <form id="python-form">
+                    <label for="face-image">Upload Face Image:</label>
+                    <input type="file" id="face-image" name="face_image" accept="image/*">
+                    <label>Select Analyses:</label>
+                    <label><input type="checkbox" name="analysis" value="download"> Download Images/Videos</label><br>
+                    <label><input type="checkbox" name="analysis" value="nlp"> NLP Attribution</label><br>
+                    <label><input type="checkbox" name="analysis" value="object_detection"> Object Detection</label><br>
+                    <label><input type="checkbox" name="analysis" value="geo_analysis"> Geo Analysis</label><br>
+                    <label><input type="checkbox" name="analysis" value="network_analysis"> Network Analysis</label><br>
+                    <label><input type="checkbox" name="analysis" value="face_recognition"> Face Recognition</label><br>
+                    <label><input type="checkbox" name="analysis" value="face_clustering"> Face Clustering</label>
+                    <button type="submit">Run Selected</button>
+                </form>
+                <hr>
+                <h4>Data Filters and Geo Controls</h4>
+                <label>Node ID:</label>
+                <input type="text" id="filter-node-id" placeholder="e.g. 5"><br>
+                <label>Entity Index:</label>
+                <input type="text" id="filter-entity-index" placeholder="e.g. 0"><br>
+                <button id="apply-filter-btn">Apply</button>
+                <h5>Filter by Type:</h5>
+                <label><input type="checkbox" class="type-filter" value="person"> Person</label><br>
+                <label><input type="checkbox" class="type-filter" value="image"> Image</label><br>
+                <label><input type="checkbox" class="type-filter" value="video"> Video</label><br>
+                <h5>Search by Name/Attribute:</h5>
+                <input type="text" id="filter-search" placeholder="e.g. middle eastern or age:32 or location:*"><br>
+                <h5>Add Custom Attribute Filter:</h5>
+                <input type="text" id="custom-attribute" placeholder="e.g. age">
+                <button id="add-custom-filter">Add</button>
+                <div id="dynamic-filters"></div>
+                <hr>
+                <button id="save-python-img-btn">Save Python Image</button><br>
+                <button id="save-js-graph-btn">Save JS Graph</button><br>
+                <button id="save-map-btn">Save Map as Image</button><br>
+                <button id="delete-geo-btn">Delete All GeoData</button>
+            </div>
+            <div class="resize-handle resize-handle-right"></div>
+            <div class="resize-handle resize-handle-bottom"></div>
+            <div class="resize-handle resize-handle-corner"></div>
+        </div>
+        <div class="section-box" data-section="map">
+            <div class="section-header">
+                <h4>Leaflet Map with GeoData Points</h4>
+                <div class="section-controls">
+                    <select class="size-dropdown">
+                        <option value="1x1" selected>1x1</option>
+                        <option value="2x1">2x1</option>
+                        <option value="1x2">1x2</option>
+                        <option value="2x2">2x2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="map"></div>
+            </div>
+            <div class="resize-handle resize-handle-right"></div>
+            <div class="resize-handle resize-handle-bottom"></div>
+            <div class="resize-handle resize-handle-corner"></div>
+        </div>
+        <div class="section-box" data-section="globe">
+            <div class="section-header">
+                <h4>3D Globe with GeoData</h4>
+                <div class="section-controls">
+                    <select class="size-dropdown">
+                        <option value="1x1" selected>1x1</option>
+                        <option value="2x1">2x1</option>
+                        <option value="1x2">1x2</option>
+                        <option value="2x2">2x2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="globe"></div>
+                <div id="globe-counts" style="text-align: center; margin-top: 10px;"></div>
+            </div>
+            <div class="resize-handle resize-handle-right"></div>
+            <div class="resize-handle resize-handle-bottom"></div>
+            <div class="resize-handle resize-handle-corner"></div>
+        </div>
+        <div class="section-box" data-section="dataview">
+            <div class="section-header">
+                <h4>Data View (Persons, Images, Videos, Attributes)</h4>
+                <div class="section-controls">
+                    <select class="size-dropdown">
+                        <option value="1x1" selected>1x1</option>
+                        <option value="2x1">2x1</option>
+                        <option value="1x2">1x2</option>
+                        <option value="2x2">2x2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="data-view"></div>
+                <div id="data-view-sentinel"></div>
+            </div>
+            <div class="resize-handle resize-handle-right"></div>
+            <div class="resize-handle resize-handle-bottom"></div>
+            <div class="resize-handle resize-handle-corner"></div>
+        </div>
+        <div class="section-box" data-section="pythongraph">
+            <div class="section-header">
+                <h4>Connection Graph from Python</h4>
+                <div class="section-controls">
+                    <select class="size-dropdown">
+                        <option value="1x1" selected>1x1</option>
+                        <option value="2x1">2x1</option>
+                        <option value="1x2">1x2</option>
+                        <option value="2x2">2x2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="python-images"></div>
+                <div id="connection-graph"></div>
+            </div>
+            <div class="resize-handle resize-handle-right"></div>
+            <div class="resize-handle resize-handle-bottom"></div>
+            <div class="resize-handle resize-handle-corner"></div>
+        </div>
+        <div class="section-box" data-section="jsgraph">
+            <div class="section-header">
+                <h4>JS Connection Graph</h4>
+                <div class="section-controls">
+                    <select class="size-dropdown">
+                        <option value="1x1" selected>1x1</option>
+                        <option value="2x1">2x1</option>
+                        <option value="1x2">1x2</option>
+                        <option value="2x2">2x2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="js-connection-graph"></div>
+            </div>
+            <div class="resize-handle resize-handle-right"></div>
+            <div class="resize-handle resize-handle-bottom"></div>
+            <div class="resize-handle resize-handle-corner"></div>
+        </div>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet-image/leaflet-image.js"></script>
+    <script src="https://unpkg.com/three/build/three.min.js"></script>
+    <script src="https://unpkg.com/globe.gl"></script>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
+    <script>
+        const socket = io();
+        let draggedElement = null;
+        let map = null;
+        let globe = null;
+        let jsChart = null;
+        let mapMarkers = [];
+        let dataItems = [];
+        let allGeoData = [];
+        let pointsDataAll = [];
+        let labelsDataAll = [];
+        let pythonImages = [];
+        let currentPythonImageIndex = 0;
+        let graphs = [];
+        let currentGraphIndex = 0;
+        let loadedDataItems = 0;
+        const ITEMS_PER_BATCH = 100;
+        let dynamicFilterOptions = {};
+
+        // Initialize drag-and-drop functionality
+        function initializeDragAndDrop() {
+            document.querySelectorAll('.section-box').forEach(section => {
+                const header = section.querySelector('.section-header');
+                header.draggable = true;
+                header.addEventListener('dragstart', e => {
+                    draggedElement = section;
+                    section.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                });
+                header.addEventListener('dragend', () => section.classList.remove('dragging'));
+                section.addEventListener('dragover', e => {
+                    e.preventDefault();
+                    if (section !== draggedElement) section.classList.add('drag-over');
+                });
+                section.addEventListener('dragleave', () => section.classList.remove('drag-over'));
+                section.addEventListener('drop', e => {
+                    e.preventDefault();
+                    section.classList.remove('drag-over');
+                    if (section !== draggedElement) {
+                        const gridContainer = document.getElementById('gridContainer');
+                        const allSections = Array.from(gridContainer.children);
+                        const draggedIndex = allSections.indexOf(draggedElement);
+                        const targetIndex = allSections.indexOf(section);
+                        if (draggedIndex < targetIndex) {
+                            section.parentNode.insertBefore(draggedElement, section.nextSibling);
+                        } else {
+                            section.parentNode.insertBefore(draggedElement, section);
+                        }
+                        setTimeout(() => {
+                            if (map) map.invalidateSize();
+                            if (globe) globe.refresh();
+                        }, 100);
+                    }
+                });
+            });
+        }
+
+        // Initialize section size controls
+        function initializeSizeControls() {
+            document.querySelectorAll('.size-dropdown').forEach(dropdown => {
+                dropdown.addEventListener('change', e => {
+                    const section = e.target.closest('.section-box');
+                    const size = e.target.value;
+                    section.classList.remove('col-span-2', 'col-span-3', 'col-span-4', 'row-span-2');
+                    switch (size) {
+                        case '2x1':
+                            section.classList.add('col-span-2');
+                            break;
+                        case '1x2':
+                            section.classList.add('row-span-2');
+                            break;
+                        case '2x2':
+                            section.classList.add('col-span-2', 'row-span-2');
+                            break;
+                    }
+                    setTimeout(() => {
+                        if (map) map.invalidateSize();
+                        if (globe) globe.refresh();
+                        if (jsChart) jsChart.redraw();
+                    }, 100);
+                });
+            });
+        }
+
+        // Initialize map, globe, and graph
+        function initializeComponents() {
+            map = L.map('map', { renderer: L.canvas() }).setView([48.2082, 16.3738], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '© OpenStreetMap'
+            }).addTo(map);
+
+            globe = Globe()(document.getElementById('globe'))
+                .globeImageUrl('//unpkg.com/three-globe/example/img/earth-dark.jpg')
+                .bumpImageUrl('//unpkg.com/three-globe/example/img/earth-topology.png')
+                .backgroundImageUrl('//unpkg.com/three-globe/example/img/night-sky.png')
+                .pointColor(() => 'red')
+                .pointAltitude(0)
+                .pointRadius(0.25)
+                .labelText(d => d.text)
+                .labelSize(1.5)
+                .labelColor(() => 'white')
+                .labelResolution(2);
+
+            jsChart = new vis.Network(document.getElementById('js-connection-graph'), { nodes: [], edges: [] }, {});
+        }
+
+        // Initialize data view observer for lazy loading
+        function initializeDataViewObserver() {
+            const dataViewEl = document.getElementById('data-view');
+            const sentinel = document.getElementById('data-view-sentinel');
+            const observer = new IntersectionObserver(entries => {
+                if (entries[0].isIntersecting && loadedDataItems < filteredDataItems().length) {
+                    loadMoreDataItems();
+                }
+            }, { root: dataViewEl, threshold: 0.1 });
+            observer.observe(sentinel);
+        }
+
+        // Generate dynamic filters
+        function generateDynamicFilters() {
+            document.getElementById('dynamic-filters').innerHTML = '';
+        }
+
+        // Add custom attribute filter
+        function addCustomAttributeFilter() {
+            const attr = document.getElementById('custom-attribute').value.trim().toLowerCase();
+            if (!attr) return;
+            const uniqueValues = new Set();
+            dataItems.forEach(item => {
+                const entityData = item.full_entity || item.attributes || {};
+                getAttributeValues(entityData, attr).forEach(val => {
+                    if (val !== undefined && val !== 'N/A' && val !== null) {
+                        if (typeof val === 'string') uniqueValues.add(val);
+                        else if (typeof val === 'object' && val !== null) Object.keys(val).forEach(k => uniqueValues.add(k));
+                        else if (typeof val === 'number') uniqueValues.add(val.toString());
+                    }
+                });
+            });
+            if (uniqueValues.size > 0) {
+                const isNumeric = Array.from(uniqueValues).every(val => !isNaN(parseFloat(val)) && isFinite(val));
+                const filtersContainer = document.getElementById('dynamic-filters');
+                const group = document.createElement('div');
+                group.innerHTML = `<strong>${attr.charAt(0).toUpperCase() + attr.slice(1)}:</strong><br>`;
+
+                // Always include checkboxes for unique values
+                Array.from(uniqueValues).sort((a, b) => isNumeric ? parseFloat(a) - parseFloat(b) : a.localeCompare(b)).forEach(opt => {
+                    const lbl = document.createElement('label');
+                    lbl.innerHTML = `<input type="checkbox" class="dynamic-filter" data-type="${attr}" data-value="${opt}"> ${opt}<br>`;
+                    group.appendChild(lbl);
+                });
+
+                // Add numeric comparison inputs if values are numeric
+                if (isNumeric) {
+                    group.innerHTML += `
+                        <br>
+                        <label>Greater than (>): <input type="number" class="numeric-filter" data-attr="${attr}" data-op="gt"></label><br>
+                        <label>Less than (<): <input type="number" class="numeric-filter" data-attr="${attr}" data-op="lt"></label><br>
+                    `;
+                }
+
+                filtersContainer.appendChild(group);
+                document.getElementById('custom-attribute').value = '';
+                dynamicFilterOptions[attr] = Array.from(uniqueValues);
+            }
+        }
+
+        // Get all attribute values from nested object/array
+        function getAttributeValues(obj, key, results = []) {
+            if (obj === null || obj === undefined) return results;
+            if (obj.hasOwnProperty(key)) {
+                results.push(obj[key]);
+            }
+            if (Array.isArray(obj)) {
+                obj.forEach(item => {
+                    if (typeof item === 'object' && item !== null) {
+                        getAttributeValues(item, key, results);
+                    }
+                });
+            } else if (typeof obj === 'object') {
+                for (let subkey in obj) {
+                    if (typeof obj[subkey] === 'object' && obj[subkey] !== null) {
+                        getAttributeValues(obj[subkey], key, results);
+                    }
+                }
+            }
+            return results;
+        }
+
+        // Filter data items based on user input
+        function filteredDataItems() {
+            const searchInput = document.getElementById('filter-search')?.value.toLowerCase().trim() || '';
+            const selectedTypes = Array.from(document.querySelectorAll('.type-filter:checked')).map(cb => cb.value);
+            const filterNodeId = document.getElementById('filter-node-id')?.value.trim() || '';
+            const filterEntityIndex = document.getElementById('filter-entity-index')?.value.trim() || '';
+            let dynamicFilters = {};
+            document.querySelectorAll('.dynamic-filter:checked').forEach(check => {
+                const type = check.dataset.type;
+                const val = check.dataset.value;
+                if (!dynamicFilters[type]) dynamicFilters[type] = [];
+                dynamicFilters[type].push(val.toLowerCase());
+            });
+            document.querySelectorAll('.numeric-filter').forEach(input => {
+                if (input.value.trim() !== '') {
+                    const attr = input.dataset.attr;
+                    const op = input.dataset.op;
+                    if (!dynamicFilters[attr]) dynamicFilters[attr] = {};
+                    dynamicFilters[attr][op] = parseFloat(input.value);
+                }
+            });
+            return dataItems.filter(item => {
+                let pass = true;
+                const entityData = item.full_entity || item.attributes || {};
+                let passSearch = true;
+                if (searchInput) {
+                    const terms = searchInput.split(/\s+/);
+                    for (let term of terms) {
+                        if (term.includes(':')) {
+                            let [key, val] = term.split(':');
+                            val = val.toLowerCase();
+                            let attrVals = getAttributeValues(entityData, key);
+                            if (attrVals.length === 0) {
+                                passSearch = false;
+                                break;
+                            }
+                            let found = false;
+                            for (let attrVal of attrVals) {
+                                if (typeof attrVal === 'object' && attrVal !== null) {
+                                    let subfound = false;
+                                    for (let k in attrVal) {
+                                        if (k.toLowerCase().includes(val) || attrVal[k].toString().toLowerCase().includes(val)) {
+                                            subfound = true;
+                                            break;
+                                        }
+                                    }
+                                    if (subfound) {
+                                        found = true;
+                                        break;
+                                    }
+                                    if (val === '*' && Object.keys(attrVal).length > 0) {
+                                        found = true;
+                                        break;
+                                    }
+                                } else {
+                                    let attrStr = (attrVal !== null && attrVal !== undefined) ? attrVal.toString().toLowerCase() : '';
+                                    if (val === '*') {
+                                        if (attrStr !== 'n/a' && attrStr !== '' && attrStr !== 'null') {
+                                            found = true;
+                                            break;
+                                        }
+                                    } else {
+                                        if (attrStr.includes(val)) {
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (!found) {
+                                passSearch = false;
+                                break;
+                            }
+                        } else {
+                            const searchStr = `${item.name?.toLowerCase() || ''} ${JSON.stringify(truncateValue(entityData)).toLowerCase()}`;
+                            if (!searchStr.includes(term)) {
+                                passSearch = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!passSearch) pass = false;
+                for (let attr in dynamicFilters) {
+                    let attrVals = getAttributeValues(entityData, attr);
+                    if (attrVals.length === 0) {
+                        pass = false;
+                        continue;
+                    }
+                    const filter = dynamicFilters[attr];
+                    if (Array.isArray(filter)) {
+                        let matches = false;
+                        for (let attrVal of attrVals) {
+                            if (typeof attrVal === 'string' && filter.includes(attrVal.toLowerCase())) {
+                                matches = true;
+                                break;
+                            } else if (typeof attrVal === 'object' && attrVal !== null) {
+                                for (let v of filter) {
+                                    if (v in attrVal) {
+                                        matches = true;
+                                        break;
+                                    }
+                                }
+                                if (matches) break;
+                            } else if (typeof attrVal === 'number' && filter.includes(attrVal.toString().toLowerCase())) {
+                                matches = true;
+                                break;
+                            }
+                        }
+                        if (!matches) pass = false;
+                    } else if (typeof filter === 'object') {
+                        let matches = false;
+                        for (let attrVal of attrVals) {
+                            let numVal = parseFloat(attrVal);
+                            if (isNaN(numVal)) continue;
+                            let thisMatch = true;
+                            if (filter.gt !== undefined && numVal <= filter.gt) thisMatch = false;
+                            if (filter.lt !== undefined && numVal >= filter.lt) thisMatch = false;
+                            if (thisMatch) {
+                                matches = true;
+                                break;
+                            }
+                        }
+                        if (!matches) pass = false;
+                    }
+                }
+                if (selectedTypes.length > 0 && !selectedTypes.includes(item.type)) pass = false;
+                if (filterNodeId && item.node_id != parseInt(filterNodeId)) pass = false;
+                if (filterEntityIndex && item.entity_index != parseInt(filterEntityIndex)) pass = false;
+                return pass;
+            });
+        }
+
+        // Filter geo items
+        function filteredGeoItems() {
+            const searchInput = document.getElementById('filter-search')?.value.toLowerCase().trim() || '';
+            const selectedTypes = Array.from(document.querySelectorAll('.type-filter:checked')).map(cb => cb.value);
+            const filterNodeId = document.getElementById('filter-node-id')?.value.trim() || '';
+            const filterEntityIndex = document.getElementById('filter-entity-index')?.value.trim() || '';
+            let dynamicFilters = {};
+            document.querySelectorAll('.dynamic-filter:checked').forEach(check => {
+                const type = check.dataset.type;
+                const val = check.dataset.value;
+                if (!dynamicFilters[type]) dynamicFilters[type] = [];
+                dynamicFilters[type].push(val.toLowerCase());
+            });
+            document.querySelectorAll('.numeric-filter').forEach(input => {
+                if (input.value.trim() !== '') {
+                    const attr = input.dataset.attr;
+                    const op = input.dataset.op;
+                    if (!dynamicFilters[attr]) dynamicFilters[attr] = {};
+                    dynamicFilters[attr][op] = parseFloat(input.value);
+                }
+            });
+            return allGeoData.filter(item => {
+                let pass = true;
+                const entityData = item.entity || {};
+                let passSearch = true;
+                if (searchInput) {
+                    const terms = searchInput.split(/\s+/);
+                    for (let term of terms) {
+                        if (term.includes(':')) {
+                            let [key, val] = term.split(':');
+                            val = val.toLowerCase();
+                            let attrVals = getAttributeValues(entityData, key);
+                            if (attrVals.length === 0) {
+                                passSearch = false;
+                                break;
+                            }
+                            let found = false;
+                            for (let attrVal of attrVals) {
+                                if (typeof attrVal === 'object' && attrVal !== null) {
+                                    let subfound = false;
+                                    for (let k in attrVal) {
+                                        if (k.toLowerCase().includes(val) || attrVal[k].toString().toLowerCase().includes(val)) {
+                                            subfound = true;
+                                            break;
+                                        }
+                                    }
+                                    if (subfound) {
+                                        found = true;
+                                        break;
+                                    }
+                                    if (val === '*' && Object.keys(attrVal).length > 0) {
+                                        found = true;
+                                        break;
+                                    }
+                                } else {
+                                    let attrStr = (attrVal !== null && attrVal !== undefined) ? attrVal.toString().toLowerCase() : '';
+                                    if (val === '*') {
+                                        if (attrStr !== 'n/a' && attrStr !== '' && attrStr !== 'null') {
+                                            found = true;
+                                            break;
+                                        }
+                                    } else {
+                                        if (attrStr.includes(val)) {
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (!found) {
+                                passSearch = false;
+                                break;
+                            }
+                        } else {
+                            const searchStr = `${item.image?.toLowerCase() || ''} ${JSON.stringify(truncateValue(entityData)).toLowerCase()}`;
+                            if (!searchStr.includes(term)) {
+                                passSearch = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!passSearch) pass = false;
+                for (let attr in dynamicFilters) {
+                    let attrVals = getAttributeValues(entityData, attr);
+                    if (attrVals.length === 0) {
+                        pass = false;
+                        continue;
+                    }
+                    const filter = dynamicFilters[attr];
+                    if (Array.isArray(filter)) {
+                        let matches = false;
+                        for (let attrVal of attrVals) {
+                            if (typeof attrVal === 'string' && filter.includes(attrVal.toLowerCase())) {
+                                matches = true;
+                                break;
+                            } else if (typeof attrVal === 'object' && attrVal !== null) {
+                                for (let v of filter) {
+                                    if (v in attrVal) {
+                                        matches = true;
+                                        break;
+                                    }
+                                }
+                                if (matches) break;
+                            } else if (typeof attrVal === 'number' && filter.includes(attrVal.toString().toLowerCase())) {
+                                matches = true;
+                                break;
+                            }
+                        }
+                        if (!matches) pass = false;
+                    } else if (typeof filter === 'object') {
+                        let matches = false;
+                        for (let attrVal of attrVals) {
+                            let numVal = parseFloat(attrVal);
+                            if (isNaN(numVal)) continue;
+                            let thisMatch = true;
+                            if (filter.gt !== undefined && numVal <= filter.gt) thisMatch = false;
+                            if (filter.lt !== undefined && numVal >= filter.lt) thisMatch = false;
+                            if (thisMatch) {
+                                matches = true;
+                                break;
+                            }
+                        }
+                        if (!matches) pass = false;
+                    }
+                }
+                const geoType = entityData.type || (item.image ? 'image' : item.video ? 'video' : 'unknown');
+                if (selectedTypes.length > 0 && !selectedTypes.includes(geoType)) pass = false;
+                if (filterNodeId && item.node_id != parseInt(filterNodeId)) pass = false;
+                if (filterEntityIndex && item.entity_idx != parseInt(filterEntityIndex)) pass = false;
+                return pass;
+            });
+        }
+
+        // Truncate data for display
+        function truncateValue(value, maxLength = 50, depth = 0, maxDepth = 6) {
+            if (depth > maxDepth) return '[Truncated: Max depth reached]';
+            if (value === null || value === undefined) return 'N/A';
+            if (typeof value === 'string') {
+                if (value.length > maxLength) return `${value.slice(0, maxLength)}.....`;
+                return value;
+            } else if (Array.isArray(value)) {
+                if (value.length > 10) {
+                    return [
+                        ...value.slice(0, 5).map(v => truncateValue(v, maxLength, depth + 1)),
+                        `[truncated, ${value.length - 10} more elements]`,
+                        ...value.slice(-5).map(v => truncateValue(v, maxLength, depth + 1))
+                    ];
+                } else {
+                    return value.map(v => truncateValue(v, maxLength, depth + 1));
+                }
+            } else if (typeof value === 'object') {
+                const truncatedObj = {};
+                for (const key in value) {
+                    if (key === 'embedding' || key === 'cropped_base64' || key === 'base64') {
+                        truncatedObj[key] = `[Truncated ${key}, length: ${value[key]?.length || 'unknown'}]`;
+                    } else {
+                        truncatedObj[key] = truncateValue(value[key], maxLength, depth + 1);
+                    }
+                }
+                return truncatedObj;
+            }
+            return value;
+        }
+
+        // Load more data items for lazy loading
+        function loadMoreDataItems() {
+            const dataViewEl = document.getElementById('data-view');
+            const filteredItems = filteredDataItems();
+            const endIndex = Math.min(loadedDataItems + ITEMS_PER_BATCH, filteredItems.length);
+            for (let i = loadedDataItems; i < endIndex; i++) {
+                const item = filteredItems[i];
+                const div = document.createElement('div');
+                div.className = 'data-item';
+                const formatAttributes = attrs => {
+                    try {
+                        if (!attrs) return 'Error: Entity data missing';
+                        return JSON.stringify(truncateValue(attrs), null, 2)
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;');
+                    } catch (e) {
+                        return `Error formatting entity: ${e.message}`;
+                    }
+                };
+                const entityData = item.full_entity || item.attributes || {};
+                let mediaContent = '';
+                if (item.type === 'image' && item.image) {
+                    mediaContent = `<img src="${item.image.src}" alt="${item.image.alt || 'image'}" style="max-width: 100px;">`;
+                } else if (item.type === 'video' && item.video) {
+                    mediaContent = `<video src="${item.video}" controls style="max-width: 100px;"></video>`;
+                } else if (item.images && item.images.length) {
+                    mediaContent += item.images.map(img => `<img src="${img}" alt="image" style="max-width: 100px;">`).join('');
+                } else if (item.videos && item.videos.length) {
+                    mediaContent += item.videos.map(vid => `<video src="${vid}" controls style="max-width: 100px;"></video>`).join('');
+                }
+                div.innerHTML = `
+                    Node ID: ${item.node_id}<br>
+                    Entity Index: ${item.entity_index}<br>
+                    Type: ${item.type}<br>
+                    Entity: <pre>${formatAttributes(entityData)}</pre><br>
+                    ${mediaContent}
+                `;
+                dataViewEl.appendChild(div);
+            }
+            loadedDataItems = endIndex;
+        }
+
+        // Update data view
+        function updateDataView() {
+            const dataViewEl = document.getElementById('data-view');
+            dataViewEl.innerHTML = '';
+            loadedDataItems = 0;
+            loadMoreDataItems();
+        }
+
+        // Update geo view
+        function updateGeoView() {
+            const filteredGeo = filteredGeoItems();
+            const indices = filteredGeo.map(geo => allGeoData.indexOf(geo));
+            mapMarkers.forEach(marker => map.removeLayer(marker));
+            indices.forEach(i => mapMarkers[i].addTo(map));
+            const filteredPoints = indices.map(i => pointsDataAll[i]);
+            const filteredLabels = indices.map(i => labelsDataAll[i]);
+            globe.pointsData(filteredPoints).labelsData(filteredLabels);
+        }
+
+        // Update globe counts
+        function updateGlobeCounts() {
+            let nodeCount = new Set(dataItems.map(item => item.node_id)).size;
+            let entityCount = dataItems.length;
+            document.getElementById('globe-counts').innerHTML = `Nodes: ${nodeCount} | Entities: ${entityCount}`;
+        }
+
+        // Handle WebSocket messages
+        const ws = new WebSocket('ws://localhost:4002');
+        ws.onmessage = event => {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('Parsed WebSocket data:', data);
+                if (data.type === 'console_log') {
+                    const consoleEl = document.getElementById('console-output');
+                    consoleEl.innerHTML += `${data.message}<br>`;
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                } else if (data.type === 'data_update') {
+                    dataItems = [];
+                    const entities = data.entities || data.persons || [];
+                    entities.forEach(entity => {
+                        const item = {
+                            node_id: entity.node_id || 0,
+                            entity_index: entity.index || entity.entity_idx || entity.entity_index || 0,
+                            type: entity.type || 'unknown',
+                            name: entity.name || '',
+                            full_entity: entity,
+                            images: entity.image ? [entity.image.src] : (entity.images || []),
+                            videos: entity.video ? [entity.video] : (entity.videos || []),
+                            attributes: entity.details || entity.attributes || {}
+                        };
+                        dataItems.push(item);
+                    });
+                    updateDataView();
+                    generateDynamicFilters();
+                    updateGlobeCounts();
+                } else if (data.type === 'graph_data') {
+                    graphs.push({ nodes: data.nodes, edges: data.edges });
+                    updateJsGraph();
+                } else if (data.type === 'python_graph_images') {
+                    pythonImages.push(...data.images);
+                    console.log('Received python_graph_images:', pythonImages);
+                    currentPythonImageIndex = 0;
+                    updatePythonImages();
+                } else {
+                    const { lat, lon, probability, image, detections, video, node_id, entity_idx, entity } = data;
+                    const customIcon = L.icon({
+                        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+                        iconSize: [25, 41],
+                        iconAnchor: [12, 41],
+                        popupAnchor: [1, -34],
+                        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
+                    });
+                    const imageName = image
+                        ? image.replace('.jpg', '').replace('_frame_0', '').replace(/node_(\d+)_entity_(\d+)/, 'n$1e$2')
+                        : 'N/A';
+                    const popupContent = `${imageName}<br>Entity: ${entity ? JSON.stringify(entity, null, 2) : 'No entity data'}`;
+                    const marker = L.marker([lat, lon], { icon: customIcon }).bindPopup(popupContent);
+                    marker.addTo(map);
+                    mapMarkers.push(marker);
+                    pointsDataAll.push({ lat: parseFloat(lat), lng: parseFloat(lon) });
+                    labelsDataAll.push({ lat: parseFloat(lat), lng: parseFloat(lon), text: `${imageName}` });
+                    globe.pointsData(pointsDataAll).labelsData(labelsDataAll);
+                    allGeoData.push(data);
+                }
+            } catch (err) {
+                console.error('WebSocket data error:', err);
+            }
+        };
+
+        ws.onerror = error => console.error('WebSocket error:', error);
+
+        // Handle button clicks
+        document.getElementById('break-attempt-loop').addEventListener('click', () => {
+            ws.send(JSON.stringify({ type: 'break_attempt_loop' }));
+        });
+
+        document.getElementById('save-map-btn').addEventListener('click', () => {
+            if (typeof leafletImage === 'undefined') {
+                html2canvas(document.getElementById('map')).then(canvas => {
+                    const link = document.createElement('a');
+                    link.href = canvas.toDataURL('image/png');
+                    link.download = 'map.png';
+                    link.click();
+                }).catch(err => console.error('html2canvas error:', err));
+                return;
+            }
+            leafletImage(map, (err, canvas) => {
+                if (err) {
+                    console.error('Error generating map image:', err);
+                    html2canvas(document.getElementById('map')).then(canvas => {
+                        const link = document.createElement('a');
+                        link.href = canvas.toDataURL('image/png');
+                        link.download = 'map.png';
+                        link.click();
+                    }).catch(fallbackErr => console.error('html2canvas fallback error:', fallbackErr));
+                    return;
+                }
+                const link = document.createElement('a');
+                link.href = canvas.toDataURL('image/png');
+                link.download = 'map.png';
+                link.click();
+            });
+        });
+
+        document.getElementById('delete-geo-btn').addEventListener('click', () => {
+            mapMarkers.forEach(m => map.removeLayer(m));
+            mapMarkers = [];
+            allGeoData = [];
+            pointsDataAll = [];
+            labelsDataAll = [];
+            globe.pointsData([]).labelsData([]);
+        });
+
+        document.getElementById('apply-filter-btn').addEventListener('click', () => {
+            const queryValue = document.getElementById('query').value.trim();
+            if (queryValue) ws.send(JSON.stringify({ type: 'request_data', project: queryValue }));
+            updateDataView();
+            updateGeoView();
+        });
+
+        document.getElementById('load-graph-btn').addEventListener('click', () => {
+            const queryValue = document.getElementById('query').value.trim();
+            if (queryValue) ws.send(JSON.stringify({ type: 'request_graph', project: queryValue }));
+        });
+
+        // Handle scrape form submission
+        document.getElementById('scrape-form').addEventListener('submit', async e => {
+            e.preventDefault();
+            const queryValue = document.getElementById('query').value.trim();
+            const depthValue = document.getElementById('depth').value;
+            if (!queryValue) return;
+            const consoleEl = document.getElementById('console-output');
+            consoleEl.innerHTML += 'Scraping...<br>';
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+            try {
+                const resp = await fetch('/process-data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        config: JSON.stringify({ type: "socialMedia", query: queryValue, depth: depthValue })
+                    })
+                });
+                const data = await resp.json();
+                consoleEl.innerHTML += JSON.stringify(data, null, 2) + '<br>';
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+            } catch (error) {
+                consoleEl.innerHTML += `Error: ${error.message}<br>`;
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+            }
+        });
+
+        // Load persons data
+        function loadPersonsData(projectName) {
+            const consoleEl = document.getElementById('console-output');
+            consoleEl.innerHTML += 'Loading persons data...<br>';
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+            fetch(`/get-persons/${projectName}`)
+                .then(response => response.json())
+                .then(data => {
+                    dataItems = [];
+                    data.persons.forEach(entity => {
+                        const item = {
+                            node_id: entity.node_id || 0,
+                            entity_index: entity.index || entity.entity_idx || 0,
+                            type: entity.type || 'unknown',
+                            name: entity.name || '',
+                            full_entity: entity,
+                            images: entity.image ? [entity.image.src] : (entity.images || []),
+                            videos: entity.video ? [entity.video] : (entity.videos || []),
+                            attributes: entity.details || entity.attributes || {}
+                        };
+                        dataItems.push(item);
+                    });
+                    updateDataView();
+                    generateDynamicFilters();
+                    updateGlobeCounts();
+                    consoleEl.innerHTML += 'Persons data loaded.<br>';
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                })
+                .catch(error => {
+                    consoleEl.innerHTML += `Error loading persons data: ${error.message}<br>`;
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                });
+        }
+
+        // Handle python form submission
+        document.getElementById('python-form').addEventListener('submit', async e => {
+            e.preventDefault();
+            const queryValue = document.getElementById('query').value.trim();
+            if (!queryValue) return;
+            const selected = Array.from(document.querySelectorAll('input[name="analysis"]:checked')).map(cb => cb.value);
+            if (!selected.length) return;
+            const consoleEl = document.getElementById('console-output');
+            consoleEl.innerHTML += 'Python script running...<br>';
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+            const formData = new FormData();
+            formData.append('project', queryValue);
+            formData.append('analyses', JSON.stringify(selected));
+            const faceFile = document.getElementById('face-image').files[0];
+            if (faceFile) formData.append('face_image', faceFile);
+            graphs = [];
+            currentGraphIndex = 0;
+            updateJsGraph();
+            try {
+                const resp = await fetch('/run-python', { method: 'POST', body: formData });
+                const data = await resp.json();
+                const pythonImagesEl = document.getElementById('python-images');
+                pythonImagesEl.innerHTML = '';
+                (data.images || []).forEach(img => {
+                    const imageEl = document.createElement('img');
+                    imageEl.src = img;
+                    pythonImagesEl.appendChild(imageEl);
+                });
+                consoleEl.innerHTML += 'Python script finished.<br>';
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+            } catch (error) {
+                consoleEl.innerHTML += `Python script error: ${error.message}<br>`;
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+            }
+        });
+
+        // Update JS graph
+        function updateJsGraph() {
+            let titleEl = document.getElementById('js-connection-graph-title');
+            let buttonsEl = document.getElementById('js-graph-buttons');
+            if (!titleEl) {
+                const container = document.querySelector('[data-section="jsgraph"] .section-content');
+                titleEl = document.createElement('h5');
+                titleEl.id = 'js-connection-graph-title';
+                titleEl.style.color = '#e0e0e0';
+                titleEl.style.textAlign = 'center';
+                titleEl.style.marginBottom = '5px';
+                container.insertBefore(titleEl, container.firstChild);
+                const graphDiv = document.getElementById('js-connection-graph');
+                graphDiv.style.flex = '1';
+                graphDiv.style.minHeight = '0';
+                buttonsEl = document.createElement('div');
+                buttonsEl.id = 'js-graph-buttons';
+                buttonsEl.style.display = 'flex';
+                buttonsEl.style.justifyContent = 'center';
+                buttonsEl.style.gap = '10px';
+                buttonsEl.style.marginTop = '10px';
+                container.appendChild(buttonsEl);
+                const leftBtn = document.createElement('button');
+                leftBtn.textContent = 'Previous';
+                leftBtn.onclick = () => {
+                    if (graphs.length > 1) {
+                        currentGraphIndex = (currentGraphIndex - 1 + graphs.length) % graphs.length;
+                        updateJsGraph();
+                    }
+                };
+                buttonsEl.appendChild(leftBtn);
+                const rightBtn = document.createElement('button');
+                rightBtn.textContent = 'Next';
+                rightBtn.onclick = () => {
+                    if (graphs.length > 1) {
+                        currentGraphIndex = (currentGraphIndex + 1) % graphs.length;
+                        updateJsGraph();
+                    }
+                };
+                buttonsEl.appendChild(rightBtn);
+            }
+            titleEl.textContent = graphs.length > 0 ? `Graph ${currentGraphIndex + 1} of ${graphs.length}` : '';
+            if (graphs.length > 0) {
+                const graphData = {
+                    nodes: new vis.DataSet(graphs[currentGraphIndex].nodes),
+                    edges: new vis.DataSet(graphs[currentGraphIndex].edges)
+                };
+                jsChart.setData(graphData);
+                jsChart.fit();
+                jsChart.redraw();
+            } else {
+                jsChart.setData({ nodes: [], edges: [] });
+            }
+            buttonsEl.style.display = graphs.length <= 1 ? 'none' : 'flex';
+        }
+
+        // Update python images
+        function updatePythonImages() {
+            const el = document.getElementById('python-images');
+            el.innerHTML = '';
+            if (pythonImages.length === 0) return;
+            const imgContainer = document.createElement('div');
+            imgContainer.style.textAlign = 'center';
+            const title = document.createElement('h5');
+            title.textContent = `Image ${currentPythonImageIndex + 1} of ${pythonImages.length}`;
+            title.style.color = '#e0e0e0';
+            title.style.marginBottom = '5px';
+            imgContainer.appendChild(title);
+            const img = document.createElement('img');
+            img.src = `data:image/png;base64,${pythonImages[currentPythonImageIndex]}`;
+            imgContainer.appendChild(img);
+            el.appendChild(imgContainer);
+            const btnContainer = document.createElement('div');
+            btnContainer.style.display = 'flex';
+            btnContainer.style.justifyContent = 'center';
+            btnContainer.style.gap = '10px';
+            btnContainer.style.marginTop = '10px';
+            const leftBtn = document.createElement('button');
+            leftBtn.textContent = 'Left';
+            leftBtn.onclick = () => {
+                currentPythonImageIndex = (currentPythonImageIndex - 1 + pythonImages.length) % pythonImages.length;
+                updatePythonImages();
+            };
+            btnContainer.appendChild(leftBtn);
+            const rightBtn = document.createElement('button');
+            rightBtn.textContent = 'Right';
+            rightBtn.onclick = () => {
+                currentPythonImageIndex = (currentPythonImageIndex + 1) % pythonImages.length;
+                updatePythonImages();
+            };
+            btnContainer.appendChild(rightBtn);
+            el.appendChild(btnContainer);
+        }
+
+        // Save python image
+        document.getElementById('save-python-img-btn').addEventListener('click', () => {
+            if (pythonImages.length === 0) return;
+            const link = document.createElement('a');
+            link.href = `data:image/png;base64,${pythonImages[currentPythonImageIndex]}`;
+            link.download = `python_image_${currentPythonImageIndex + 1}.png`;
+            link.click();
+        });
+
+        // Save JS graph
+        document.getElementById('save-js-graph-btn').addEventListener('click', () => {
+            html2canvas(document.getElementById('js-connection-graph')).then(canvas => {
+                const link = document.createElement('a');
+                link.href = canvas.toDataURL('image/png');
+                link.download = 'js_graph.png';
+                link.click();
+            });
+        });
+
+        // Initialize on DOM load
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeDragAndDrop();
+            initializeSizeControls();
+            initializeComponents();
+            initializeDataViewObserver();
+            document.getElementById('add-custom-filter').addEventListener('click', addCustomAttributeFilter);
+            document.getElementById('filter-search').addEventListener('input', () => { updateDataView(); updateGeoView(); });
+            document.getElementById('dynamic-filters').addEventListener('change', () => { updateDataView(); updateGeoView(); });
+            document.getElementById('dynamic-filters').addEventListener('input', () => { updateDataView(); updateGeoView(); });
+            document.querySelectorAll('.type-filter').forEach(cb => cb.addEventListener('change', () => { updateDataView(); updateGeoView(); }));
+            document.getElementById('filter-node-id').addEventListener('input', () => { updateDataView(); updateGeoView(); });
+            document.getElementById('filter-entity-index').addEventListener('input', () => { updateDataView(); updateGeoView(); });
+        });
+
+        // Handle socket logs
+        socket.on('log', data => {
+            const consoleEl = document.getElementById('console-output');
+            consoleEl.innerHTML += `${data}<br>`;
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        });
+    </script>
+</body>
+</html>
