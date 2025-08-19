@@ -54,33 +54,19 @@ connection = psycopg2.connect(
 )
 cursor = connection.cursor()
 def convert_to_serializable(obj):
-    if isinstance(obj, dict):
+    if isinstance(obj, (np.ndarray, np.generic)):
+        return obj.tolist() if isinstance(obj, np.ndarray) else obj.item()
+    elif isinstance(obj, (np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, dict):
         return {k: convert_to_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_serializable(i) for i in obj]
-    elif isinstance(obj, np.generic):
-        return obj.item()
-    else:
-        return obj
-
-def convert_to_serializable2(data):
-    """Convert numpy types and other non-serializable objects to JSON-serializable types."""
-    if isinstance(data, np.ndarray):
-        return data.tolist()
-    elif isinstance(data, (np.float32, np.float64)):
-        return float(data)
-    elif isinstance(data, (np.int32, np.int64)):
-        return int(data)
-    elif isinstance(data, dict):
-        return {k: convert_to_serializable(v) for k, v in data.items()}
-    elif isinstance(data, (list, tuple)):
-        return [convert_to_serializable(item) for item in data]
-    return data
+    elif isinstance(obj, (list, tuple)):
+        return [convert_to_serializable(item) for item in obj]
+    return obj
 
 def fix_entity_indices(project):
-    """
-    Reassign unique, sequential indices to all entities in the project_nodes table.
-    """
     try:
         select_query = f'SELECT id, content FROM "{project}_nodes";'
         cursor.execute(select_query)
@@ -110,388 +96,6 @@ def fix_entity_indices(project):
     except Exception as e:
         print(f"Error fixing entity indices: {e}")
         connection.rollback()
-# Load YOLO model for object detection
-def load_detection_model():
-    model_path = "yolov8n.pt" # Pre-trained YOLOv8 small model
-    if not os.path.exists(model_path):
-        print("Downloading YOLO model...")
-        torch.hub.download_url_to_file(
-            'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt', model_path
-        )
-    return YOLO(model_path)
-def detect_objects(image_path, model):
-    """Detect objects in the image using the YOLO model."""
-    results = model(image_path) # Perform detection
-    detections = []
-    for result in results: # Iterate over detected objects
-        for box in result.boxes: # Access bounding boxes
-            class_id = int(box.cls.item()) # Convert class tensor to an integer
-            label = result.names[class_id] # Class name
-            confidence = float(box.conf.item()) # Confidence score
-            detections.append({
-                    "label": label,
-                    "confidence": confidence,
-                    "bbox": box.xyxy.tolist() # Boundingbox coordinates
-                })
-    return detections
-def extract_metadata(image_path):
-    try:
-        img = Image.open(image_path)
-        exif_bytes = img.info.get("exif")
-        if exif_bytes is None or len(exif_bytes) == 0:
-            exif_data = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
-        else:
-            exif_data = piexif.load(exif_bytes)
-        metadata = {}
-        if "GPS" in exif_data and exif_data["GPS"]:
-            gps_info = exif_data["GPS"]
-            def convert_to_degrees(value):
-                d, m, s = value
-                return d + (m / 60.0) + (s / 3600.0)
-            lat_ref = gps_info.get(piexif.GPSIFD.GPSLatitudeRef, b"").decode("utf-8")
-            lon_ref = gps_info.get(piexif.GPSIFD.GPSLongitudeRef, b"").decode("utf-8")
-            lat = convert_to_degrees(gps_info[piexif.GPSIFD.GPSLatitude])
-            lon = convert_to_degrees(gps_info[piexif.GPSIFD.GPSLongitude])
-            if lat_ref == "S":
-                lat = -lat
-            if lon_ref == "W":
-                lon = -lon
-            metadata['lat'] = lat
-            metadata['lon'] = lon
-        # Extract timestamp
-        timestamp = None
-        if "Exif" in exif_data:
-            date_time_original = exif_data["Exif"].get(piexif.ExifIFD.DateTimeOriginal)
-            if date_time_original:
-                timestamp = date_time_original.decode("utf-8")
-        if not timestamp and "0th" in exif_data:
-            date_time = exif_data["0th"].get(piexif.ImageIFD.DateTime)
-            if date_time:
-                timestamp = date_time.decode("utf-8")
-        if timestamp:
-            metadata['timestamp'] = timestamp
-        return metadata
-    except Exception as e:
-        print(f"Error extracting metadata: {e}")
-    return {}
-def geocode_location(location_str, user_agent="my_analysis_app"):
-    """
-    Convert a location string to geodata (latitude, longitude) using Nominatim.
-    Returns a dict with lat, lon, and confidence (if available).
-    """
-    try:
-        geolocator = Nominatim(user_agent=user_agent)
-        location = geolocator.geocode(location_str, timeout=10)
-        if location:
-            return {
-                "lat": location.latitude,
-                "lon": location.longitude,
-                "confidence": 1.0
-            }
-        else:
-            print(f"Could not geocode location: {location_str}")
-            return None
-    except (GeocoderTimedOut, GeocoderQuotaExceeded) as e:
-        print(f"Geocoding error for {location_str}: {e}")
-        time.sleep(2)
-        return None
-    except Exception as e:
-        print(f"Unexpected error geocoding {location_str}: {e}")
-        return None
-def process_location_entities(project, output_file):
-    """
-    Process all entities in the project_nodes table, geocode location fields,
-    and update the database with geodata.
-    """
-    try:
-        select_query = f'SELECT id, content FROM "{project}_nodes";'
-        cursor.execute(select_query)
-        rows = cursor.fetchall()
-        for node_id, content in rows:
-            updated = False
-            entities_parent = content
-            if 'profileData' in content:
-                for key in content['profileData']:
-                    if 'entities' in content['profileData'][key]:
-                        entities_parent = content['profileData'][key]
-                        break
-            if 'entities' in entities_parent:
-                entities = entities_parent['entities']
-                for entity in entities:
-                    entity_idx = entity.get('index')
-                    if not entity_idx:
-                        continue
-                    if 'details' in entity and 'location' in entity['details'] and entity['details']['location']:
-                        location_str = entity['details']['location']
-                        if 'geolocation' in entity and 'lat' in entity['geolocation']:
-                            print(f"Location already geocoded for node {node_id}, entity {entity_idx}: {location_str}")
-                            continue
-                        geodata = geocode_location(location_str)
-                        if geodata:
-                            entity['geolocation'] = {
-                                "lat": geodata['lat'],
-                                "lon": geodata['lon'],
-                                "probability": geodata['confidence']
-                            }
-                            updated = True
-                            save_geo_data(
-                                output_file=output_file,
-                                image_path=f"node_{node_id}_entity_{entity_idx}_location",
-                                additional_info=f"Geocoded location: {location_str}",
-                                lat=geodata['lat'],
-                                lon=geodata['lon'],
-                                prob=geodata['confidence']
-                            )
-                            print(f"Geocoded location for node {node_id}, entity {entity_idx}: {location_str} -> ({geodata['lat']}, {geodata['lon']})")
-                        time.sleep(1)
-            if updated:
-                update_query = f'UPDATE "{project}_nodes" SET content = %s WHERE id = %s;'
-                cursor.execute(update_query, (json.dumps(content), node_id))
-                connection.commit()
-                print(f"Updated geolocation for node {node_id}")
-    except Exception as e:
-        print(f"Error processing location entities: {e}")
-        connection.rollback()
-def save_geo_data(output_file, image_path, additional_info, lat, lon, prob, timestamp=None):
-    try:
-        with open(output_file, "a") as file:
-            file.write(f"Image: {image_path}\n")
-            file.write(f"Additional Info: {additional_info}\n")
-            file.write(f"Latitude: {lat:.6f}\n")
-            file.write(f"Longitude: {lon:.6f}\n")
-            file.write(f"Probability: {prob:.6f}\n")
-            if timestamp:
-                file.write(f"Timestamp: {timestamp}\n")
-            file.write("\n")
-        print(f"✅ Geo data written for {image_path}")
-    except Exception as e:
-        print(f"Error saving geo data: {e}")
-def process_image(image_path, endpoint_url, output_file, model, additional_info, project):
-    # Check if image has already been processed
-    filename = os.path.basename(image_path)
-    parts = filename[:-4].split('_') # assume .jpg
-    if len(parts) >= 4 and parts[0] == 'node' and parts[2] == 'entity':
-        node_id = parts[1]
-        entity_idx = int(parts[3])
-    else:
-        print(f"Skipping invalid filename for geo: {filename}")
-        return
-    file_mtime = os.path.getmtime(image_path)
-    try:
-        select_query = f'SELECT content FROM "{project}_nodes" WHERE id = %s;'
-        cursor.execute(select_query, (node_id,))
-        row = cursor.fetchone()
-        if not row:
-            print(f"No node found for id {node_id}")
-            return
-        content = row[0]
-        is_frame = len(parts) > 4 and parts[4] == 'frame'
-        frame_idx = int(parts[5]) if is_frame and len(parts) > 5 else None
-        # Check for existing geolocation and file modification time
-        if 'image' in content and entity_idx == 1 and not is_frame:
-            if 'geolocation' in content and 'lat' in content['geolocation'] and content.get('last_geo_processed', 0) >= file_mtime:
-                print(f"Skipping already processed image: {filename} (geolocation exists and file unchanged in content)")
-                return
-        else:
-            entities_parent = content
-            if 'profileData' in content:
-                for key in content['profileData']:
-                    if 'entities' in content['profileData'][key]:
-                        entities_parent = content['profileData'][key]
-                        break
-            if 'entities' in entities_parent:
-                for ent in entities_parent['entities']:
-                    if ent.get('index') == entity_idx:
-                        if is_frame:
-                            if 'frame_geolocation' in ent and frame_idx in ent['frame_geolocation'] and 'lat' in ent['frame_geolocation'][frame_idx] and ent.get('frame_last_geo_processed', {}).get(frame_idx, 0) >= file_mtime:
-                                print(f"Skipping already processed frame: {filename} (geolocation exists and file unchanged for frame {frame_idx})")
-                                return
-                        elif 'geolocation' in ent and 'lat' in ent['geolocation'] and ent.get('last_geo_processed', 0) >= file_mtime:
-                            print(f"Skipping already processed image: {filename} (geolocation exists and file unchanged for entity {entity_idx})")
-                            return
-                        break
-    except Exception as e:
-        print(f"Error checking existing geolocation for {filename}: {e}")
-        return
-    # Original processing logic
-    metadata = extract_metadata(image_path)
-    timestamp = metadata.get('timestamp')
-    lat = lon = prob = None
-    source = "metadata"
-    entity = None
-    # Parse filename to get node_id and entity_idx (already done above)
-    try:
-        select_query = f'SELECT content FROM "{project}_nodes" WHERE id = %s;'
-        cursor.execute(select_query, (node_id,))
-        row = cursor.fetchone()
-        if not row:
-            print(f"No node found for id {node_id}")
-            return
-        content = row[0]
-        entities_parent = content
-        if 'profileData' in content:
-            for key in content['profileData']:
-                if 'entities' in content['profileData'][key]:
-                    entities_parent = content['profileData'][key]
-                    break
-        if 'entities' in entities_parent:
-            entities = entities_parent['entities']
-            for ent in entities:
-                if ent.get('index') == entity_idx:
-                    entity = ent
-                    break
-        if not entity:
-            print(f"No entity found for index {entity_idx} in node {node_id}")
-    except Exception as e:
-        print(f"Error fetching entity for {filename}: {e}")
-        return
-    if 'lat' in metadata and 'lon' in metadata:
-        lat = metadata['lat']
-        lon = metadata['lon']
-        prob = 1.0
-        print(f"Metadata Geolocation Found: Latitude={lat:.6f}, Longitude={lon:.6f}")
-    elif entity and 'details' in entity and 'location' in entity['details'] and entity['details']['location']:
-        location_str = entity['details']['location']
-        if 'geolocation' in entity and 'lat' in entity['geolocation']:
-            lat = entity['geolocation']['lat']
-            lon = entity['geolocation']['lon']
-            prob = entity['geolocation']['probability']
-            source = "entity_existing"
-            print(f"Using existing entity geolocation for {filename}: ({lat}, {lon})")
-        else:
-            geodata = geocode_location(location_str)
-            if geodata:
-                lat = geodata['lat']
-                lon = geodata['lon']
-                prob = geodata['confidence']
-                source = "entity_geocoded"
-                entity['geolocation'] = {"lat": lat, "lon": lon, "probability": prob}
-                update_query = f'UPDATE "{project}_nodes" SET content = %s WHERE id = %s;'
-                cursor.execute(update_query, (json.dumps(content), node_id))
-                connection.commit()
-                print(f"Geocoded and updated entity location for {filename}: {location_str} -> ({lat}, {lon})")
-                time.sleep(1)
-    elif entity and 'nlp_analysis' in entity:
-        nlp = entity['nlp_analysis']
-        # Check if 'named_entities' exists in nlp
-        if 'named_entities' in nlp:
-            locs = [e for e in nlp['named_entities'] if e['label'] == 'LOC' and e['score'] > 0.5]
-            if locs:
-                locs.sort(key=lambda x: x['score'], reverse=True)
-                location_str = locs[0]['text']
-                geodata = geocode_location(location_str)
-                if geodata:
-                    lat = geodata['lat']
-                    lon = geodata['lon']
-                    prob = locs[0]['score']
-                    source = "nlp_geocoded"
-                    entity['geolocation'] = {"lat": lat, "lon": lon, "probability": prob, "source": source}
-                    update_query = f'UPDATE "{project}_nodes" SET content = %s WHERE id = %s;'
-                    cursor.execute(update_query, (json.dumps(content), node_id))
-                    connection.commit()
-                    print(f"Geocoded NLP location for {filename}: {location_str} -> ({lat}, {lon})")
-                    time.sleep(1)
-            else:
-                print(f"No locations found with score > 0.5 for {filename}")
-        else:
-            print(f"Error: 'named_entities' not found in nlp_analysis for {filename}. NLP data: {nlp}")
-    if lat is None or lon is None:
-        print("No metadata or entity location found. Running GeoCLIP.")
-        # Add image size check to skip invalid/small images
-        try:
-            from PIL import Image
-            img = Image.open(image_path)
-            width, height = img.size
-            if width < 16 or height < 16:  # Arbitrary threshold; adjust as needed for minimum viable image size
-                print(f"Skipping too small image: {filename} (size: {width}x{height})")
-                return
-        except Exception as e:
-            print(f"Error loading image {filename}: {e}")
-            return
-        top_pred_gps, top_pred_prob = model.predict(image_path, top_k=1)
-        if len(top_pred_gps) == 0:
-            print(f"No GPS coordinates found for: {image_path}")
-            return
-        lat_tensor, lon_tensor = top_pred_gps[0]
-        prob_tensor = top_pred_prob[0]
-        lat = lat_tensor.item()
-        lon = lon_tensor.item()
-        prob = prob_tensor.item()
-        source = "geoclip"
-    print(f"Extracted Coordinates from {source}: Latitude={lat:.6f}, Longitude={lon:.6f}, Probability={prob:.6f}")
-    if timestamp:
-        print(f"Extracted Timestamp: {timestamp}")
-    # Update DB with geolocation
-    try:
-        select_query = f'SELECT content FROM "{project}_nodes" WHERE id = %s;'
-        cursor.execute(select_query, (node_id,))
-        row = cursor.fetchone()
-        if row:
-            content = row[0]
-            found = False
-            if 'image' in content and entity_idx == 1 and not is_frame:
-                content['geolocation'] = {"lat": lat, "lon": lon, "probability": prob, "source": source}
-                if timestamp:
-                    content['geolocation']['timestamp'] = timestamp
-                content['last_geo_processed'] = file_mtime
-                found = True
-            else:
-                entities_parent = content
-                if 'profileData' in content:
-                    for key in content['profileData']:
-                        if 'entities' in content['profileData'][key]:
-                            entities_parent = content['profileData'][key]
-                            break
-                if 'entities' in entities_parent:
-                    for ent in entities_parent['entities']:
-                        if ent.get('index') == entity_idx:
-                            if is_frame:
-                                if 'frame_geolocation' not in ent:
-                                    ent['frame_geolocation'] = {}
-                                ent['frame_geolocation'][frame_idx] = {"lat": lat, "lon": lon, "probability": prob, "source": source}
-                                if timestamp:
-                                    ent['frame_geolocation'][frame_idx]['timestamp'] = timestamp
-                                if 'frame_last_geo_processed' not in ent:
-                                    ent['frame_last_geo_processed'] = {}
-                                ent['frame_last_geo_processed'][frame_idx] = file_mtime
-                            else:
-                                ent['geolocation'] = {"lat": lat, "lon": lon, "probability": prob, "source": source}
-                                if timestamp:
-                                    ent['geolocation']['timestamp'] = timestamp
-                                ent['last_geo_processed'] = file_mtime
-                            found = True
-                            break
-            if found:
-                update_query = f'UPDATE "{project}_nodes" SET content = %s WHERE id = %s;'
-                cursor.execute(update_query, (json.dumps(content), node_id))
-                connection.commit()
-                print(f"Updated geolocation for node {node_id}, entity {entity_idx}" + (f", frame {frame_idx}" if is_frame else ""))
-            else:
-                print(f"No place to add geolocation for node {node_id}, entity {entity_idx}")
-    except Exception as e:
-        print(f"Error updating geolocation for {filename}: {e}")
-    save_geo_data(output_file, image_path, additional_info + f" (source: {source})", lat, lon, prob, timestamp)
-    print(f"Saved geo data to {output_file}")
-    payload = {
-        "lat": lat,
-        "lon": lon,
-        "probability": prob,
-        "image": os.path.basename(image_path),
-        "source": source,
-        "node_id": node_id,
-        "entity_idx": entity_idx,
-        "entity": entity
-    }
-    if timestamp:
-        payload["timestamp"] = timestamp
-    try:
-        response = requests.post(endpoint_url, json=payload)
-        if response.status_code == 200:
-            print(f"Coordinates sent successfully for image: {image_path}")
-        else:
-            print(f"Server returned status {response.status_code} for {image_path}: {response.text}")
-    except Exception as e:
-        print(f"Error sending coordinates for {image_path}: {e}")
 def download_all_images(project, output_folder):
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
@@ -715,10 +319,7 @@ def split_videos(video_folder, output_folder):
             count += 1
         cap.release()
 def get_image_filename(image_field):
-    """
-    Extract filename from image field, whether it's a string or a dictionary.
-    Returns None if no valid filename is found.
-    """
+
     if isinstance(image_field, str):
         return image_field
     elif isinstance(image_field, dict):
@@ -728,6 +329,343 @@ def get_image_filename(image_field):
             if key in image_field and isinstance(image_field[key], str):
                 return image_field[key]
     return None
+# Load YOLO model for object detection
+def load_detection_model():
+    model_path = "yolov8n.pt" # Pre-trained YOLOv8 small model
+    if not os.path.exists(model_path):
+        print("Downloading YOLO model...")
+        torch.hub.download_url_to_file(
+            'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt', model_path
+        )
+    return YOLO(model_path)
+def detect_objects(image_path, model):
+    """Detect objects in the image using the YOLO model."""
+    results = model(image_path) # Perform detection
+    detections = []
+    for result in results: # Iterate over detected objects
+        for box in result.boxes: # Access bounding boxes
+            class_id = int(box.cls.item()) # Convert class tensor to an integer
+            label = result.names[class_id] # Class name
+            confidence = float(box.conf.item()) # Confidence score
+            detections.append({
+                    "label": label,
+                    "confidence": confidence,
+                    "bbox": box.xyxy.tolist() # Boundingbox coordinates
+                })
+    return detections
+def extract_metadata(image_path):
+    try:
+        img = Image.open(image_path)
+        exif_bytes = img.info.get("exif")
+        if exif_bytes is None or len(exif_bytes) == 0:
+            exif_data = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+        else:
+            exif_data = piexif.load(exif_bytes)
+        metadata = {}
+        if "GPS" in exif_data and exif_data["GPS"]:
+            gps_info = exif_data["GPS"]
+            def convert_to_degrees(value):
+                d, m, s = value
+                return d + (m / 60.0) + (s / 3600.0)
+            lat_ref = gps_info.get(piexif.GPSIFD.GPSLatitudeRef, b"").decode("utf-8")
+            lon_ref = gps_info.get(piexif.GPSIFD.GPSLongitudeRef, b"").decode("utf-8")
+            lat = convert_to_degrees(gps_info[piexif.GPSIFD.GPSLatitude])
+            lon = convert_to_degrees(gps_info[piexif.GPSIFD.GPSLongitude])
+            if lat_ref == "S":
+                lat = -lat
+            if lon_ref == "W":
+                lon = -lon
+            metadata['lat'] = lat
+            metadata['lon'] = lon
+        # Extract timestamp
+        timestamp = None
+        if "Exif" in exif_data:
+            date_time_original = exif_data["Exif"].get(piexif.ExifIFD.DateTimeOriginal)
+            if date_time_original:
+                timestamp = date_time_original.decode("utf-8")
+        if not timestamp and "0th" in exif_data:
+            date_time = exif_data["0th"].get(piexif.ImageIFD.DateTime)
+            if date_time:
+                timestamp = date_time.decode("utf-8")
+        if timestamp:
+            metadata['timestamp'] = timestamp
+        return metadata
+    except Exception as e:
+        print(f"Error extracting metadata: {e}")
+    return {}
+def geocode_location(location_str, user_agent="my_analysis_app"):
+    try:
+        geolocator = Nominatim(user_agent=user_agent)
+        location = geolocator.geocode(location_str, timeout=10)
+        if location:
+            return {
+                "lat": location.latitude,
+                "lon": location.longitude,
+                "confidence": 3.0
+            }
+        else:
+            print(f"Could not geocode location: {location_str}")
+            return None
+    except (GeocoderTimedOut, GeocoderQuotaExceeded) as e:
+        print(f"Geocoding error for {location_str}: {e}")
+        time.sleep(2)
+        return None
+    except Exception as e:
+        print(f"Unexpected error geocoding {location_str}: {e}")
+        return None
+def process_image(image_path, endpoint_url, output_file, model, additional_info, project):
+    # Check if image has already been processed
+    filename = os.path.basename(image_path)
+    parts = filename[:-4].split('_') # assume .jpg
+    if len(parts) >= 4 and parts[0] == 'node' and parts[2] == 'entity':
+        node_id = parts[1]
+        entity_idx = int(parts[3])
+    else:
+        print(f"Skipping invalid filename for geo: {filename}")
+        return
+
+    file_mtime = os.path.getmtime(image_path)
+    is_frame = len(parts) > 4 and parts[4] == 'frame'
+    frame_idx = int(parts[5]) if is_frame and len(parts) > 5 else None
+
+    # Variables to track if already processed and existing geo data
+    already_processed = False
+    existing_geo_data = None
+    entity = None
+    content = None
+
+    try:
+        select_query = f'SELECT content FROM "{project}_nodes" WHERE id = %s;'
+        cursor.execute(select_query, (node_id,))
+        row = cursor.fetchone()
+        if not row:
+            print(f"No node found for id {node_id}")
+            return
+        content = row[0]
+
+        # Get entity
+        entities_parent = content
+        if 'profileData' in content:
+            for key in content['profileData']:
+                if 'entities' in content['profileData'][key]:
+                    entities_parent = content['profileData'][key]
+                    break
+
+        if 'entities' in entities_parent:
+            for ent in entities_parent['entities']:
+                if ent.get('index') == entity_idx:
+                    entity = ent
+                    break
+
+        if not entity and not ('image' in content and entity_idx == 1):
+            print(f"No entity found for index {entity_idx} in node {node_id}")
+            return
+
+        # Check for existing geolocation and file modification time
+        if 'image' in content and entity_idx == 1 and not is_frame:
+            if 'geolocation' in content and 'lat' in content['geolocation'] and content.get('last_geo_processed', 0) >= file_mtime:
+                print(f"Already processed image: {filename} (geolocation exists and file unchanged in content)")
+                already_processed = True
+                existing_geo_data = content['geolocation']
+        elif entity:
+            if is_frame:
+                if 'frame_geolocation' in entity and frame_idx in entity['frame_geolocation'] and 'lat' in entity['frame_geolocation'][frame_idx] and entity.get('frame_last_geo_processed', {}).get(frame_idx, 0) >= file_mtime:
+                    print(f"Already processed frame: {filename} (geolocation exists and file unchanged for frame {frame_idx})")
+                    already_processed = True
+                    existing_geo_data = entity['frame_geolocation'][frame_idx]
+            elif 'geolocation' in entity and 'lat' in entity['geolocation'] and entity.get('last_geo_processed', 0) >= file_mtime:
+                print(f"Already processed image: {filename} (geolocation exists and file unchanged for entity {entity_idx})")
+                already_processed = True
+                existing_geo_data = entity['geolocation']
+    except Exception as e:
+        print(f"Error checking existing geolocation for {filename}: {e}")
+        return
+
+    # If already processed, use existing data
+    if already_processed and existing_geo_data:
+        lat = existing_geo_data['lat']
+        lon = existing_geo_data['lon']
+        prob = existing_geo_data.get('probability', 1.0)
+        source = existing_geo_data.get('source', 'existing')
+        timestamp = existing_geo_data.get('timestamp', None)
+        print(f"Using existing geolocation data for {filename}: lat={lat:.6f}, lon={lon:.6f}")
+    else:
+        # Process the image to get geolocation
+        metadata = extract_metadata(image_path)
+        timestamp = metadata.get('timestamp')
+        lat = lon = prob = None
+        source = "metadata"
+
+        if 'lat' in metadata and 'lon' in metadata:
+            lat = metadata['lat']
+            lon = metadata['lon']
+            prob = 4.0
+            print(f"Metadata Geolocation Found: Latitude={lat:.6f}, Longitude={lon:.6f}")
+        elif entity and 'details' in entity and 'location' in entity['details'] and entity['details']['location']:
+            location_str = entity['details']['location']
+            if 'geolocation' in entity and 'lat' in entity['geolocation']:
+                lat = entity['geolocation']['lat']
+                lon = entity['geolocation']['lon']
+                prob = entity['geolocation'].get('probability', 3.5)
+                source = "entity_existing"
+                print(f"Using existing entity geolocation for {filename}: ({lat}, {lon})")
+            else:
+                geodata = geocode_location(location_str)
+                if geodata:
+                    lat = geodata['lat']
+                    lon = geodata['lon']
+                    prob = geodata['confidence']
+                    source = "entity_geocoded"
+                    entity['geolocation'] = {"lat": lat, "lon": lon, "probability": prob}
+                    update_query = f'UPDATE "{project}_nodes" SET content = %s WHERE id = %s;'
+                    cursor.execute(update_query, (json.dumps(content), node_id))
+                    connection.commit()
+                    print(f"Geocoded and updated entity location for {filename}: {location_str} -> ({lat}, {lon})")
+                    time.sleep(1)
+        elif entity and 'nlp_analysis' in entity:
+            nlp = entity['nlp_analysis']
+            if 'named_entities' in nlp:
+                locs = [e for e in nlp['named_entities'] if e['label'] == 'LOC' and e['score'] > 0.5]
+                if locs:
+                    locs.sort(key=lambda x: x['score'], reverse=True)
+                    location_str = locs[0]['text']
+                    geodata = geocode_location(location_str)
+                    if geodata:
+                        lat = geodata['lat']
+                        lon = geodata['lon']
+                        prob = 2.0  # Set probability for NLP geocoded
+                        source = "nlp_geocoded"
+                        entity['geolocation'] = {"lat": lat, "lon": lon, "probability": prob, "source": source}
+                        update_query = f'UPDATE "{project}_nodes" SET content = %s WHERE id = %s;'
+                        cursor.execute(update_query, (json.dumps(content), node_id))
+                        connection.commit()
+                        print(f"Geocoded NLP location for {filename}: {location_str} -> ({lat}, {lon})")
+                        time.sleep(1)
+                else:
+                    print(f"No locations found with score > 0.5 for {filename}")
+            else:
+                print(f"Error: 'named_entities' not found in nlp_analysis for {filename}. NLP data: {nlp}")
+
+        if lat is None or lon is None:
+            print("No metadata or entity location found. Running GeoCLIP.")
+            try:
+                from PIL import Image
+                img = Image.open(image_path)
+                width, height = img.size
+                if width < 16 or height < 16:
+                    print(f"Skipping too small image: {filename} (size: {width}x{height})")
+                    return
+            except Exception as e:
+                print(f"Error loading image {filename}: {e}")
+                return
+
+            top_pred_gps, top_pred_prob = model.predict(image_path, top_k=1)
+            if len(top_pred_gps) == 0:
+                print(f"No GPS coordinates found for: {image_path}")
+                return
+            lat_tensor, lon_tensor = top_pred_gps[0]
+            prob_tensor = top_pred_prob[0]
+            lat = lat_tensor.item()
+            lon = lon_tensor.item()
+            prob = prob_tensor.item()
+            source = "geoclip"
+
+        # Ensure we have valid coordinates before proceeding
+        if lat is None or lon is None:
+            print(f"Failed to extract coordinates for: {image_path}")
+            return
+
+        # Ensure prob has a value based on source
+        if prob is None:
+            if source == "metadata":
+                prob = 4.0
+            elif source == "entity_existing":
+                prob = 3.5
+            elif source == "entity_geocoded":
+                prob = 3.0
+            elif source == "nlp_geocoded":
+                prob = 2.0
+            elif source == "geoclip":
+                prob = 1.0
+            else:
+                prob = 1.0  # Default fallback
+
+        print(f"Extracted Coordinates from {source}: Latitude={lat:.6f}, Longitude={lon:.6f}, Probability={prob:.6f}")
+        if timestamp:
+            print(f"Extracted Timestamp: {timestamp}")
+
+        # Update DB with geolocation (only if not already processed)
+        try:
+            select_query = f'SELECT content FROM "{project}_nodes" WHERE id = %s;'
+            cursor.execute(select_query, (node_id,))
+            row = cursor.fetchone()
+            if row:
+                content = row[0]
+                found = False
+                if 'image' in content and entity_idx == 1 and not is_frame:
+                    content['geolocation'] = {"lat": lat, "lon": lon, "probability": prob, "source": source}
+                    if timestamp:
+                        content['geolocation']['timestamp'] = timestamp
+                    content['last_geo_processed'] = file_mtime
+                    found = True
+                else:
+                    entities_parent = content
+                    if 'profileData' in content:
+                        for key in content['profileData']:
+                            if 'entities' in content['profileData'][key]:
+                                entities_parent = content['profileData'][key]
+                                break
+                    if 'entities' in entities_parent:
+                        for ent in entities_parent['entities']:
+                            if ent.get('index') == entity_idx:
+                                if is_frame:
+                                    if 'frame_geolocation' not in ent:
+                                        ent['frame_geolocation'] = {}
+                                    ent['frame_geolocation'][frame_idx] = {"lat": lat, "lon": lon, "probability": prob, "source": source}
+                                    if timestamp:
+                                        ent['frame_geolocation'][frame_idx]['timestamp'] = timestamp
+                                    if 'frame_last_geo_processed' not in ent:
+                                        ent['frame_last_geo_processed'] = {}
+                                    ent['frame_last_geo_processed'][frame_idx] = file_mtime
+                                else:
+                                    ent['geolocation'] = {"lat": lat, "lon": lon, "probability": prob, "source": source}
+                                    if timestamp:
+                                        ent['geolocation']['timestamp'] = timestamp
+                                    ent['last_geo_processed'] = file_mtime
+                                found = True
+                                break
+                if found:
+                    update_query = f'UPDATE "{project}_nodes" SET content = %s WHERE id = %s;'
+                    cursor.execute(update_query, (json.dumps(content), node_id))
+                    connection.commit()
+                    print(f"Updated geolocation for node {node_id}, entity {entity_idx}" + (f", frame {frame_idx}" if is_frame else ""))
+                else:
+                    print(f"No place to add geolocation for node {node_id}, entity {entity_idx}")
+        except Exception as e:
+            print(f"Error updating geolocation for {filename}: {e}")
+
+    # ALWAYS send the payload, whether already processed or not
+    payload = {
+        "lat": lat,
+        "lon": lon,
+        "probability": prob,
+        "image": os.path.basename(image_path),
+        "source": source,
+        "node_id": node_id,
+        "entity_idx": entity_idx,
+        "entity": entity
+    }
+    if timestamp:
+        payload["timestamp"] = timestamp
+
+    try:
+        response = requests.post(endpoint_url, json=payload)
+        if response.status_code == 200:
+            print(f"Coordinates sent successfully for image: {image_path}")
+        else:
+            print(f"Server returned status {response.status_code} for {image_path}: {response.text}")
+    except Exception as e:
+        print(f"Error sending coordinates for {image_path}: {e}")
 def main():
     parser = argparse.ArgumentParser(description="Run analysis for a project.")
     parser.add_argument("project", help="The project name")
@@ -1354,7 +1292,6 @@ def main():
         print(f"Generated {len(visualization_paths)} visualizations")
     if 'geo_analysis' in analyses_list:
         print("\nProcessing location entities for geocoding...")
-        process_location_entities(project, output_file)
         model = GeoCLIP()
         for filename in os.listdir(image_folder):
             image_path = os.path.join(image_folder, filename)

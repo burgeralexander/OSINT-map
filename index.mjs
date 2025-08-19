@@ -981,13 +981,13 @@ class Scraper {
       await Promise.all(batch.map(task => task()));
     }
   }
-  async processSocialLinks(socialLinks, query, depth, project, processed, processedFile) {
+  async processSocialLinks(socialLinks, query, depth, max, project, processed, processedFile) {
     for (const slink of socialLinks) {
       if (processed.social.includes(slink)) continue;
-      await this.processSocialUrl(slink, query, depth, project, new Set(processed.social), null, processed, processedFile, this.page);
+      await this.processSocialUrl(slink, query, depth, max, project, new Set(processed.social), null, processed, processedFile, this.page);
     }
   }
-  async processSocialUrl(sUrl, query, currDepth, project, visited = new Set(), forcedType = null, processed, processedFile, page = this.page) {
+  async processSocialUrl(sUrl, query, currDepth, max, project, visited = new Set(), forcedType = null, processed, processedFile, page = this.page) {
     if (currDepth <= 0 || visited.has(sUrl) || processed.social.includes(sUrl)) return;
     visited.add(sUrl);
     processed.social.push(sUrl);
@@ -1099,7 +1099,7 @@ class Scraper {
             }
           }
         }
-        if (processedProfiles.size >= 1000) {
+        if (processedProfiles.size >= max) {
           hasMore = false;
         }
         // Check for next page or scroll
@@ -1186,7 +1186,8 @@ async function loadPersonsData(project) {
   try {
     const nodesQuery = `SELECT id, s_id, type, content FROM "${project}_nodes"`;
     const nodesResult = await client.query(nodesQuery);
-    console.log('Nodes Query Result:', JSON.stringify(nodesResult.rows, null, 2)); // Debug: Raw data
+    console.log('Total nodes retrieved:', nodesResult.rows.length);
+
     let allEntityItems = [];
 
     nodesResult.rows.forEach(row => {
@@ -1196,12 +1197,12 @@ async function loadPersonsData(project) {
       const allEntities = [...directEntities, ...profileEntities].filter(
         e => e && ['person', 'image', 'video'].includes(e.type)
       );
-      console.log(`Entities for Node ${row.id}:`, JSON.stringify(allEntities, null, 2)); // Debug
 
       allEntities.forEach((e, index) => {
         let attributes = e.details || {};
         let images = [];
         let videos = [];
+
         if (e.type === 'person') {
           const imgSrc = e.image
             ? (e.image.src || (e.image.base64 ? `data:image/png;base64,${e.image.base64}` : null))
@@ -1220,36 +1221,198 @@ async function loadPersonsData(project) {
             attributes = { ...e.details, alt: e.alt || 'Video' };
           }
         }
+
+        // Create a minimal entity object for transmission
         let full_entity = { ...e };
+        // Truncate base64 data for the full_entity field
         if (full_entity.image && full_entity.image.base64) {
-          full_entity.image.base64 = '[base64 truncated for transmission; see images]';
+          full_entity.image.base64 = '[base64 truncated]';
         }
         if (full_entity.base64) {
-          full_entity.base64 = '[base64 truncated for transmission; see images/videos]';
+          full_entity.base64 = '[base64 truncated]';
         }
+
         const entityItem = {
           node_id: row.id,
-          entity_index: e.index !== undefined ? e.index : index, // Use e.index if available, else fall back to loop index
+          entity_index: e.index !== undefined ? e.index : index,
           type: e.type,
           name: e.name || e.alt || e.type,
           attributes,
-          images,
-          videos,
+          images: images.map(img => {
+            // Limit base64 strings in images array
+            if (img && img.startsWith('data:') && img.length > 100000) {
+              return img.substring(0, 100000) + '...';
+            }
+            return img;
+          }),
+          videos: videos.map(vid => {
+            // Limit base64 strings in videos array
+            if (vid && vid.startsWith('data:') && vid.length > 100000) {
+              return vid.substring(0, 100000) + '...';
+            }
+            return vid;
+          }),
           full_entity
         };
-        console.log(`Entity Item for Node ${row.id} Index ${entityItem.entity_index}:`, JSON.stringify(entityItem, null, 2)); // Debug
+
         allEntityItems.push(entityItem);
       });
     });
 
-    console.log('Sending allEntityItems:', JSON.stringify(allEntityItems, null, 2)); // Debug
+    console.log(`Total entities to send: ${allEntityItems.length}`);
+
+    // Batch sending configuration
+    const BATCH_SIZE = 50; // Send 50 entities at a time
+    const MAX_BATCH_STRING_SIZE = 5 * 1024 * 1024; // 5MB max per batch
+
+    // Function to estimate JSON string size
+    function estimateSize(obj) {
+      try {
+        return JSON.stringify(obj).length;
+      } catch (e) {
+        return MAX_BATCH_STRING_SIZE + 1; // Force new batch if can't stringify
+      }
+    }
+
+    // Send initial message indicating batch transmission
     wss.clients.forEach(client => {
       if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: 'data_update', persons: allEntityItems }));
+        client.send(JSON.stringify({
+          type: 'batch_start',
+          totalBatches: Math.ceil(allEntityItems.length / BATCH_SIZE),
+          totalItems: allEntityItems.length
+        }));
       }
     });
+
+    // Send data in batches
+    let batchNumber = 0;
+    let currentBatch = [];
+    let currentBatchSize = 0;
+
+    for (let i = 0; i < allEntityItems.length; i++) {
+      const item = allEntityItems[i];
+      const itemSize = estimateSize(item);
+
+      // Check if adding this item would exceed batch limits
+      if (currentBatch.length >= BATCH_SIZE ||
+          (currentBatchSize + itemSize > MAX_BATCH_STRING_SIZE && currentBatch.length > 0)) {
+        // Send current batch
+        const message = {
+          type: 'data_update_batch',
+          batchNumber: batchNumber++,
+          persons: currentBatch,
+          isLastBatch: false
+        };
+
+        try {
+          const messageStr = JSON.stringify(message);
+          wss.clients.forEach(client => {
+            if (client.readyState === 1) {
+              client.send(messageStr);
+            }
+          });
+          console.log(`Sent batch ${batchNumber} with ${currentBatch.length} items`);
+        } catch (err) {
+          console.error(`Error sending batch ${batchNumber}:`, err);
+          // If batch still too large, send items individually
+          currentBatch.forEach((singleItem, idx) => {
+            try {
+              const singleMessage = {
+                type: 'data_update_batch',
+                batchNumber: batchNumber++,
+                persons: [singleItem],
+                isLastBatch: false
+              };
+              wss.clients.forEach(client => {
+                if (client.readyState === 1) {
+                  client.send(JSON.stringify(singleMessage));
+                }
+              });
+            } catch (singleErr) {
+              console.error(`Error sending individual item ${idx}:`, singleErr);
+            }
+          });
+        }
+
+        // Reset batch
+        currentBatch = [];
+        currentBatchSize = 0;
+
+        // Add small delay to prevent overwhelming the client
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      // Add item to current batch
+      currentBatch.push(item);
+      currentBatchSize += itemSize;
+    }
+
+    // Send remaining items in the last batch
+    if (currentBatch.length > 0) {
+      const message = {
+        type: 'data_update_batch',
+        batchNumber: batchNumber++,
+        persons: currentBatch,
+        isLastBatch: true
+      };
+
+      try {
+        const messageStr = JSON.stringify(message);
+        wss.clients.forEach(client => {
+          if (client.readyState === 1) {
+            client.send(messageStr);
+          }
+        });
+        console.log(`Sent final batch ${batchNumber} with ${currentBatch.length} items`);
+      } catch (err) {
+        console.error(`Error sending final batch:`, err);
+        // Send items individually as fallback
+        currentBatch.forEach((singleItem, idx) => {
+          try {
+            const singleMessage = {
+              type: 'data_update_batch',
+              batchNumber: batchNumber++,
+              persons: [singleItem],
+              isLastBatch: idx === currentBatch.length - 1
+            };
+            wss.clients.forEach(client => {
+              if (client.readyState === 1) {
+                client.send(JSON.stringify(singleMessage));
+              }
+            });
+          } catch (singleErr) {
+            console.error(`Error sending individual item ${idx}:`, singleErr);
+          }
+        });
+      }
+    }
+
+    // Send batch complete message
+    wss.clients.forEach(client => {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({
+          type: 'batch_complete',
+          totalBatches: batchNumber,
+          totalItems: allEntityItems.length
+        }));
+      }
+    });
+
+    console.log(`Batch transmission complete: ${batchNumber} batches sent`);
+
   } catch (err) {
     console.error('Error loading persons data:', err);
+    // Send error message to clients
+    wss.clients.forEach(client => {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({
+          type: 'error',
+          message: 'Error loading persons data',
+          error: err.message
+        }));
+      }
+    });
   } finally {
     client.release();
   }
@@ -1350,6 +1513,7 @@ app.get('/scraper', async (req, res) => {
     const parsedConfig = JSON.parse(decodeURIComponent(config));
     const query = parsedConfig.query;
     const depth = parsedConfig.depth || 1;
+    const max = parsedConfig.max || 1;
     const project = parsedConfig.project;
     await createTablesForProject(project);
     const urlsFile = path.join(ROOT_DOWNLOADS, project, 'scraped_urls.json');
@@ -1405,7 +1569,7 @@ app.get('/scraper', async (req, res) => {
     }
     let scraper = new Scraper(wss);
     await scraper.init();
-    await scraper.processSocialLinks(socialLinks, query, depth, project, processed, processedFile);
+    await scraper.processSocialLinks(socialLinks, query, depth, max, project, processed, processedFile);
     await scraper.close();
     scraper = new Scraper(wss);
     await scraper.init();

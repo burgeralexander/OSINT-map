@@ -229,7 +229,7 @@
 
         #data-view {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            grid-template-columns: 1fr;
             gap: 5px;
             height: 100%;
             overflow-y: auto;
@@ -249,6 +249,11 @@
         .data-item video {
             max-width: 100%;
             border-radius: 4px;
+        }
+
+        .data-item pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
 
         #connection-graph,
@@ -312,9 +317,11 @@
                     <input type="text" id="query" name="query" placeholder="e.g. John Smith, Jane Doe" required>
                     <label for="depth">Recursion Depth:</label>
                     <input type="number" id="depth" name="depth" min="1" value="1" required>
+                    <label for="max">Max Persons List:</label>
+                    <input type="number" id="max" name="max" min="1" value="1" required>
                     <button type="submit">Scrape</button>
-                    <button id="break-attempt-loop">Break Loop</button>
                 </form>
+                <button id="break-attempt-loop">Break Loop</button>
                 <h4>Console Output</h4>
                 <div id="console-output" class="console-output"></div>
                 <button id="load-graph-btn">Load Network Graph</button>
@@ -362,7 +369,7 @@
         </div>
         <div class="section-box" data-section="map">
             <div class="section-header">
-                <h4>Leaflet Map with GeoData Points</h4>
+                <h4>Leaflet Map with GeoData</h4>
                 <div class="section-controls">
                     <select class="size-dropdown">
                         <option value="1x1" selected>1x1</option>
@@ -401,7 +408,7 @@
         </div>
         <div class="section-box" data-section="dataview">
             <div class="section-header">
-                <h4>Data View (Persons, Images, Videos, Attributes)</h4>
+                <h4>Data View</h4>
                 <div class="section-controls">
                     <select class="size-dropdown">
                         <option value="1x1" selected>1x1</option>
@@ -421,7 +428,7 @@
         </div>
         <div class="section-box" data-section="pythongraph">
             <div class="section-header">
-                <h4>Connection Graph from Python</h4>
+                <h4>Python Graphs</h4>
                 <div class="section-controls">
                     <select class="size-dropdown">
                         <option value="1x1" selected>1x1</option>
@@ -441,7 +448,7 @@
         </div>
         <div class="section-box" data-section="jsgraph">
             <div class="section-header">
-                <h4>JS Connection Graph</h4>
+                <h4>JS Network Graphs</h4>
                 <div class="section-controls">
                     <select class="size-dropdown">
                         <option value="1x1" selected>1x1</option>
@@ -484,6 +491,9 @@
         let loadedDataItems = 0;
         const ITEMS_PER_BATCH = 100;
         let dynamicFilterOptions = {};
+        let batchedDataItems = [];
+        let expectedBatches = 0;
+        let receivedBatches = 0;
 
         // Initialize drag-and-drop functionality
         function initializeDragAndDrop() {
@@ -557,7 +567,6 @@
                 maxZoom: 19,
                 attribution: '© OpenStreetMap'
             }).addTo(map);
-
             globe = Globe()(document.getElementById('globe'))
                 .globeImageUrl('//unpkg.com/three-globe/example/img/earth-dark.jpg')
                 .bumpImageUrl('//unpkg.com/three-globe/example/img/earth-topology.png')
@@ -569,8 +578,7 @@
                 .labelSize(1.5)
                 .labelColor(() => 'white')
                 .labelResolution(2);
-
-            jsChart = new vis.Network(document.getElementById('js-connection-graph'), { nodes: [], edges: [] }, {});
+            jsChart = new vis.Network(document.getElementById('js-connection-graph'), { nodes: [], edges: [] }, { physics: { enabled: false } });
         }
 
         // Initialize data view observer for lazy loading
@@ -610,15 +618,11 @@
                 const filtersContainer = document.getElementById('dynamic-filters');
                 const group = document.createElement('div');
                 group.innerHTML = `<strong>${attr.charAt(0).toUpperCase() + attr.slice(1)}:</strong><br>`;
-
-                // Always include checkboxes for unique values
                 Array.from(uniqueValues).sort((a, b) => isNumeric ? parseFloat(a) - parseFloat(b) : a.localeCompare(b)).forEach(opt => {
                     const lbl = document.createElement('label');
                     lbl.innerHTML = `<input type="checkbox" class="dynamic-filter" data-type="${attr}" data-value="${opt}"> ${opt}<br>`;
                     group.appendChild(lbl);
                 });
-
-                // Add numeric comparison inputs if values are numeric
                 if (isNumeric) {
                     group.innerHTML += `
                         <br>
@@ -626,7 +630,6 @@
                         <label>Less than (<): <input type="number" class="numeric-filter" data-attr="${attr}" data-op="lt"></label><br>
                     `;
                 }
-
                 filtersContainer.appendChild(group);
                 document.getElementById('custom-attribute').value = '';
                 dynamicFilterOptions[attr] = Array.from(uniqueValues);
@@ -973,6 +976,8 @@
                     }
                 };
                 const entityData = item.full_entity || item.attributes || {};
+                const truncated = formatAttributes(entityData);
+                const full = JSON.stringify(entityData, null, 2).replace(/</g, '&lt;').replace(/>/g, '&gt;');
                 let mediaContent = '';
                 if (item.type === 'image' && item.image) {
                     mediaContent = `<img src="${item.image.src}" alt="${item.image.alt || 'image'}" style="max-width: 100px;">`;
@@ -987,9 +992,23 @@
                     Node ID: ${item.node_id}<br>
                     Entity Index: ${item.entity_index}<br>
                     Type: ${item.type}<br>
-                    Entity: <pre>${formatAttributes(entityData)}</pre><br>
+                    Entity: <pre class="entity-pre">${truncated}</pre><br>
+                    <button class="unfold-btn">Unfold</button>
                     ${mediaContent}
                 `;
+                const btn = div.querySelector('.unfold-btn');
+                const pre = div.querySelector('.entity-pre');
+                btn.addEventListener('click', () => {
+                    if (pre.classList.contains('expanded')) {
+                        pre.innerHTML = truncated;
+                        pre.classList.remove('expanded');
+                        btn.textContent = 'Unfold';
+                    } else {
+                        pre.innerHTML = full;
+                        pre.classList.add('expanded');
+                        btn.textContent = 'Fold';
+                    }
+                });
                 dataViewEl.appendChild(div);
             }
             loadedDataItems = endIndex;
@@ -1010,8 +1029,7 @@
             mapMarkers.forEach(marker => map.removeLayer(marker));
             indices.forEach(i => mapMarkers[i].addTo(map));
             const filteredPoints = indices.map(i => pointsDataAll[i]);
-            const filteredLabels = indices.map(i => labelsDataAll[i]);
-            globe.pointsData(filteredPoints).labelsData(filteredLabels);
+            globe.pointsData(filteredPoints);
         }
 
         // Update globe counts
@@ -1021,15 +1039,73 @@
             document.getElementById('globe-counts').innerHTML = `Nodes: ${nodeCount} | Entities: ${entityCount}`;
         }
 
+        // Process accumulated batch data
+        function processBatchedData() {
+            console.log('Processing batched data:', batchedDataItems.length, 'items');
+            dataItems = [];
+            batchedDataItems.forEach(entity => {
+                const item = {
+                    node_id: entity.node_id || 0,
+                    entity_index: entity.index || entity.entity_idx || entity.entity_index || 0,
+                    type: entity.type || 'unknown',
+                    name: entity.name || '',
+                    full_entity: entity.full_entity || entity,
+                    images: entity.images || (entity.image ? [entity.image.src] : []),
+                    videos: entity.videos || (entity.video ? [entity.video] : []),
+                    attributes: entity.attributes || entity.details || {}
+                };
+                dataItems.push(item);
+            });
+            updateDataView();
+            generateDynamicFilters();
+            updateGlobeCounts();
+            batchedDataItems = [];
+            expectedBatches = 0;
+            receivedBatches = 0;
+            console.log('Data processing complete');
+        }
+
         // Handle WebSocket messages
         const ws = new WebSocket('ws://localhost:4002');
         ws.onmessage = event => {
             try {
                 const data = JSON.parse(event.data);
-                console.log('Parsed WebSocket data:', data);
+                console.log('Received WebSocket message type:', data.type);
                 if (data.type === 'console_log') {
                     const consoleEl = document.getElementById('console-output');
                     consoleEl.innerHTML += `${data.message}<br>`;
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                } else if (data.type === 'batch_start') {
+                    batchedDataItems = [];
+                    expectedBatches = data.totalBatches;
+                    receivedBatches = 0;
+                    console.log(`Starting batch reception: expecting ${expectedBatches} batches with ${data.totalItems} total items`);
+                    const consoleEl = document.getElementById('console-output');
+                    consoleEl.innerHTML += `Receiving data in ${expectedBatches} batches...<br>`;
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                } else if (data.type === 'data_update_batch') {
+                    receivedBatches++;
+                    const entities = data.persons || [];
+                    batchedDataItems.push(...entities);
+                    console.log(`Received batch ${data.batchNumber + 1}: ${entities.length} items (Total so far: ${batchedDataItems.length})`);
+                    const consoleEl = document.getElementById('console-output');
+                    consoleEl.innerHTML += `Batch ${receivedBatches}/${expectedBatches} received (${entities.length} items)<br>`;
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                    if (data.isLastBatch) {
+                        processBatchedData();
+                    }
+                } else if (data.type === 'batch_complete') {
+                    console.log(`Batch transmission complete: ${data.totalBatches} batches, ${data.totalItems} items`);
+                    const consoleEl = document.getElementById('console-output');
+                    consoleEl.innerHTML += `All data received: ${batchedDataItems.length} items total<br>`;
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                    if (batchedDataItems.length > 0) {
+                        processBatchedData();
+                    }
+                } else if (data.type === 'error') {
+                    console.error('Server error:', data.message, data.error);
+                    const consoleEl = document.getElementById('console-output');
+                    consoleEl.innerHTML += `<span style="color: red;">Error: ${data.message}</span><br>`;
                     consoleEl.scrollTop = consoleEl.scrollHeight;
                 } else if (data.type === 'data_update') {
                     dataItems = [];
@@ -1068,29 +1144,32 @@
                         shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
                     });
                     const imageName = image
-                        ? image.replace('.jpg', '').replace('_frame_0', '').replace(/node_(\d+)_entity_(\d+)/, 'n$1e$2')
-                        : 'N/A';
-                    const popupContent = `${imageName}<br>Entity: ${entity ? JSON.stringify(entity, null, 2) : 'No entity data'}`;
+                      ? image
+                          .replace('.jpg', '')
+                          .replace(/_frame_\d+/, '') // removes "_frame_" followed by any number
+                          .replace(/node_(\d+)_entity_(\d+)/, 'n$1e$2')
+                      : 'N/A';
+                    const popupContent = `${imageName}`;
                     const marker = L.marker([lat, lon], { icon: customIcon }).bindPopup(popupContent);
                     marker.addTo(map);
                     mapMarkers.push(marker);
                     pointsDataAll.push({ lat: parseFloat(lat), lng: parseFloat(lon) });
-                    labelsDataAll.push({ lat: parseFloat(lat), lng: parseFloat(lon), text: `${imageName}` });
-                    globe.pointsData(pointsDataAll).labelsData(labelsDataAll);
+                    globe.pointsData(pointsDataAll);
                     allGeoData.push(data);
                 }
             } catch (err) {
                 console.error('WebSocket data error:', err);
+                const consoleEl = document.getElementById('console-output');
+                consoleEl.innerHTML += `<span style="color: red;">WebSocket error: ${err.message}</span><br>`;
+                consoleEl.scrollTop = consoleEl.scrollHeight;
             }
         };
-
         ws.onerror = error => console.error('WebSocket error:', error);
 
         // Handle button clicks
         document.getElementById('break-attempt-loop').addEventListener('click', () => {
             ws.send(JSON.stringify({ type: 'break_attempt_loop' }));
         });
-
         document.getElementById('save-map-btn').addEventListener('click', () => {
             if (typeof leafletImage === 'undefined') {
                 html2canvas(document.getElementById('map')).then(canvas => {
@@ -1118,23 +1197,19 @@
                 link.click();
             });
         });
-
         document.getElementById('delete-geo-btn').addEventListener('click', () => {
             mapMarkers.forEach(m => map.removeLayer(m));
             mapMarkers = [];
             allGeoData = [];
             pointsDataAll = [];
-            labelsDataAll = [];
-            globe.pointsData([]).labelsData([]);
+            globe.pointsData([]);
         });
-
         document.getElementById('apply-filter-btn').addEventListener('click', () => {
             const queryValue = document.getElementById('query').value.trim();
             if (queryValue) ws.send(JSON.stringify({ type: 'request_data', project: queryValue }));
             updateDataView();
             updateGeoView();
         });
-
         document.getElementById('load-graph-btn').addEventListener('click', () => {
             const queryValue = document.getElementById('query').value.trim();
             if (queryValue) ws.send(JSON.stringify({ type: 'request_graph', project: queryValue }));
@@ -1145,6 +1220,7 @@
             e.preventDefault();
             const queryValue = document.getElementById('query').value.trim();
             const depthValue = document.getElementById('depth').value;
+            const maxValue = document.getElementById('max').value;
             if (!queryValue) return;
             const consoleEl = document.getElementById('console-output');
             consoleEl.innerHTML += 'Scraping...<br>';
@@ -1154,7 +1230,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        config: JSON.stringify({ type: "socialMedia", query: queryValue, depth: depthValue })
+                        config: JSON.stringify({ type: "socialMedia", query: queryValue, depth: depthValue, max: maxValue })
                     })
                 });
                 const data = await resp.json();
@@ -1240,6 +1316,7 @@
         function updateJsGraph() {
             let titleEl = document.getElementById('js-connection-graph-title');
             let buttonsEl = document.getElementById('js-graph-buttons');
+            let leftBtn, rightBtn, toggleBtn;
             if (!titleEl) {
                 const container = document.querySelector('[data-section="jsgraph"] .section-content');
                 titleEl = document.createElement('h5');
@@ -1258,7 +1335,7 @@
                 buttonsEl.style.gap = '10px';
                 buttonsEl.style.marginTop = '10px';
                 container.appendChild(buttonsEl);
-                const leftBtn = document.createElement('button');
+                leftBtn = document.createElement('button');
                 leftBtn.textContent = 'Previous';
                 leftBtn.onclick = () => {
                     if (graphs.length > 1) {
@@ -1267,7 +1344,7 @@
                     }
                 };
                 buttonsEl.appendChild(leftBtn);
-                const rightBtn = document.createElement('button');
+                rightBtn = document.createElement('button');
                 rightBtn.textContent = 'Next';
                 rightBtn.onclick = () => {
                     if (graphs.length > 1) {
@@ -1276,6 +1353,18 @@
                     }
                 };
                 buttonsEl.appendChild(rightBtn);
+                toggleBtn = document.createElement('button');
+                toggleBtn.textContent = 'Enable Physics';
+                toggleBtn.onclick = () => {
+                    const enabled = jsChart.physics.options.enabled;
+                    jsChart.setOptions({ physics: { enabled: !enabled } });
+                    toggleBtn.textContent = enabled ? 'Enable Physics' : 'Disable Physics';
+                };
+                buttonsEl.appendChild(toggleBtn);
+            } else {
+                leftBtn = buttonsEl.querySelector('button:nth-child(1)');
+                rightBtn = buttonsEl.querySelector('button:nth-child(2)');
+                toggleBtn = buttonsEl.querySelector('button:nth-child(3)');
             }
             titleEl.textContent = graphs.length > 0 ? `Graph ${currentGraphIndex + 1} of ${graphs.length}` : '';
             if (graphs.length > 0) {
@@ -1289,7 +1378,14 @@
             } else {
                 jsChart.setData({ nodes: [], edges: [] });
             }
-            buttonsEl.style.display = graphs.length <= 1 ? 'none' : 'flex';
+            if (graphs.length > 0) {
+                buttonsEl.style.display = 'flex';
+                leftBtn.style.display = graphs.length > 1 ? '' : 'none';
+                rightBtn.style.display = graphs.length > 1 ? '' : 'none';
+                toggleBtn.style.display = '';
+            } else {
+                buttonsEl.style.display = 'none';
+            }
         }
 
         // Update python images

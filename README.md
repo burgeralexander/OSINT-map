@@ -1,6 +1,8 @@
 # OSINT-map
 OSINT-map is an open-source intelligence (OSINT) tool designed for data scraping, entity extraction, geospatial mapping, and advanced analysis. It integrates web scraping (using Puppeteer), AI-powered entity recognition (via OpenAI/DeepSeek), face recognition/clustering (DeepFace, YOLO), geospatial analysis (GeoCLIP, Nominatim), and network graphing (NetworkX). The frontend features interactive Leaflet maps, 3D globes, and connection graphs for visualizing persons, images, videos, and attributes.
 
+![Dashboard Screenshot](assets/dashboard.png)
+
 ## Key Features
 - **Scraping**: Automated browser-based scraping of social media (Instagram, Facebook, Twitter/X, TikTok, Gettr) and general web pages.
 - **Entity Extraction**: AI-driven identification of persons, images, videos, and attributes from HTML content.
@@ -43,7 +45,6 @@ OPENAI_API_KEY=your_openai_key_here
 DEEPSEEK_API_KEY=your_deepseek_key_here
 PORT=4000 # Optional: Change if needed
 ```
-(Note: `.env` is ignored by `.gitignore`.)
 
 ### Step 3: Install Node.js Dependencies
 ```bash
@@ -86,15 +87,3 @@ node index.mjs # Or index.js if renamed
 - Run analyses like Face Recognition or Geo Analysis via the Python section.
 - View results on the map, graphs, and data views.
 
-## Troubleshooting
-- **Puppeteer Errors**: Ensure headless mode works; try `headless: false` for debugging.
-- **API Rate Limits**: Use delays in code for OpenAI/DeepSeek.
-- **DB Connection**: Update `index.mjs` if your Postgres creds differ.
-- **Large Files**: If repo clone fails due to ignored large files, re-download them as above.
-- For issues, check console logs or open a GitHub issue.
-
-## License
-See `LICENSE` for details (MIT by default).
-
-## Contributing
-Pull requests welcome! Please test changes locally and ensure compatibility with Node.js v18+ and Python 3.12+.
