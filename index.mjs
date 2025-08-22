@@ -1198,10 +1198,23 @@ async function loadPersonsData(project) {
         e => e && ['person', 'image', 'video'].includes(e.type)
       );
 
+      // Extract centrality values from the node
+      const nodeCentralities = content.centralities || {};
+      const nodePersonCentralities = content.person_centralities || {};
+
       allEntities.forEach((e, index) => {
         let attributes = e.details || {};
         let images = [];
         let videos = [];
+
+        // Add centrality values to attributes
+        // Include both centralities and person_centralities if they exist
+        if (Object.keys(nodeCentralities).length > 0) {
+          attributes.centralities = nodeCentralities;
+        }
+        if (Object.keys(nodePersonCentralities).length > 0) {
+          attributes.person_centralities = nodePersonCentralities;
+        }
 
         if (e.type === 'person') {
           const imgSrc = e.image
@@ -1212,13 +1225,25 @@ async function loadPersonsData(project) {
           const imgSrc = e.src || (e.base64 ? `data:image/png;base64,${e.base64}` : null);
           if (imgSrc) {
             images = [imgSrc];
-            attributes = { ...e.details, alt: e.alt || 'Image' };
+            attributes = {
+              ...e.details,
+              alt: e.alt || 'Image',
+              // Preserve centralities in the merged attributes
+              ...(Object.keys(nodeCentralities).length > 0 && { centralities: nodeCentralities }),
+              ...(Object.keys(nodePersonCentralities).length > 0 && { person_centralities: nodePersonCentralities })
+            };
           }
         } else if (e.type === 'video') {
           const vidSrc = e.src || e.embed || (e.base64 ? `data:video/mp4;base64,${e.base64}` : null);
           if (vidSrc) {
             videos = [vidSrc];
-            attributes = { ...e.details, alt: e.alt || 'Video' };
+            attributes = {
+              ...e.details,
+              alt: e.alt || 'Video',
+              // Preserve centralities in the merged attributes
+              ...(Object.keys(nodeCentralities).length > 0 && { centralities: nodeCentralities }),
+              ...(Object.keys(nodePersonCentralities).length > 0 && { person_centralities: nodePersonCentralities })
+            };
           }
         }
 
@@ -1230,6 +1255,14 @@ async function loadPersonsData(project) {
         }
         if (full_entity.base64) {
           full_entity.base64 = '[base64 truncated]';
+        }
+
+        // Add centralities to full_entity as well
+        if (Object.keys(nodeCentralities).length > 0) {
+          full_entity.centralities = nodeCentralities;
+        }
+        if (Object.keys(nodePersonCentralities).length > 0) {
+          full_entity.person_centralities = nodePersonCentralities;
         }
 
         const entityItem = {
@@ -1588,7 +1621,7 @@ app.post('/geoclip', (req, res) => {
     return res.status(400).send({ error: 'Missing required lat/lon fields.' });
   }
   const payload = { lat, lon, probability, image, detections, node_id, entity_idx, entity, timestamp };
-  console.log(`Received GeoCLIP:`, JSON.stringify(payload, null, 2));
+  //console.log(`Received GeoCLIP:`, JSON.stringify(payload, null, 2));
   wss.clients.forEach((client) => {
     if (client.readyState === 1) {
       client.send(JSON.stringify(payload));
